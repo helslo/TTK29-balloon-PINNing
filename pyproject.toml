@@ -5,7 +5,10 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
+    "nilearn>=0.12.1",
     "numpy>=2.0.2",
+    "openneuro-py>=2023.1.0",
+    "pandas>=2.3.3",
 ]
 
 [project.scripts]
