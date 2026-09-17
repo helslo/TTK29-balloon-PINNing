@@ -76,4 +76,3 @@ Chosen because:
 - Explore DON (and possibly FMO — confirm what this refers to in the course) for operator-learning-based stimulus→BOLD mapping
 
 ---
-*This file is meant to be edited directly — update it as decisions change, and share it with any AI assistant helping on this project so it has the current scope.*
