@@ -1,1 +1,79 @@
 # TTK29-balloon-PINNing
+
+# TTK29 Project: Hybrid Modeling of Cerebral Hemodynamics
+
+## 1. Goal
+
+Compare a **pure physical model** of the BOLD hemodynamic response against **three hybrid physics+ML approaches** (PINN, CoSTA, SINDy), all fit to real task-fMRI data from a single brain region.
+
+This is a course project (TTK29, 3.75 study points) designed to build modeling skills that feed directly into a related masters project on BOLD-signal analysis in mental health disorders.
+
+## 2. Core physical model: the Balloon(-Windkessel) model
+
+Reference: Buxton, Wong & Frank (1998), *Magnetic Resonance in Medicine* 39(6):855-864, extended by Friston, Mechelli, Turner & Price (2000), *NeuroImage* 12(4):466-477.
+
+The model is a small system of nonlinear ODEs relating a neuronal "drive" input `u(t)` to the observed BOLD signal, via intermediate state variables:
+- `s` — vasodilatory signal
+- `f` — normalized cerebral blood flow (CBF)
+- `v` — normalized venous blood volume
+- `q` — normalized deoxyhemoglobin content
+
+BOLD signal is then a static nonlinear function of `v` and `q`. This is a **reduced-order model (ROM)** of the true vascular physiology — a useful framing to connect to the ROM material in the course.
+
+## 3. Methods to compare
+
+| Method | Role in this project |
+|---|---|
+| Balloon model (classical fit) | Baseline: fit ODE parameters directly to data via optimization |
+| PINN | Fit a neural network with the balloon ODE residual embedded in the loss |
+| CoSTA | Balloon model as physical core + neural network correction term for what the physical model misses |
+| SINDy | Attempt to discover governing equations directly from data, without assuming balloon structure; compare discovered dynamics against the known balloon ODEs |
+
+Comparison axes: fit accuracy (e.g. R², residuals), generalization to held-out trials/subjects, robustness to noise, and (time permitting) interpretability of what each hybrid method adds beyond the pure physical model.
+
+*(DMD, ROM framing, and other course methods can be added as secondary analyses — see Section 7.)*
+
+## 4. Dataset: LA5c / ds000030 (OpenNeuro)
+
+Chosen because it's the same dataset used in the related masters project (shared preprocessing/data-handling pipeline), and because it is a large, well-documented, public task-fMRI dataset with existing preprocessed derivatives.
+
+- Raw data: https://openneuro.org/datasets/ds000030/
+- GitHub mirror: https://github.com/OpenNeuroDatasets/ds000030
+- Preprocessed derivatives (fMRIPrep + FreeSurfer, all tasks): AWS S3 `s3://openneuro/ds000030/ds000030_R1.0.5/uncompressed/derivatives/` (no-sign-request), described in Gorgolewski, Durnez & Poldrack (2017), *F1000Research* 6:1262, https://doi.org/10.12688/f1000research.11964.2
+- Unthresholded stat maps: https://neurovault.org/collections/2606/
+
+### Task: Stop-Signal Task
+
+Chosen over the other LA5c tasks (task-switching, spatial working memory, BART, etc.) because its **"Go" trials** give a comparatively simple, well-timed, repeated motor event that can be used as the neuronal drive input `u(t)` for the balloon model — a much cleaner starting point than paradigms with heavier trial-type mixing or parametric modulators. "Stop" trials can be added later as a secondary regressor if there's time (Section 7).
+
+### Subjects: Healthy controls only (primary analysis)
+
+Kept to healthy controls for the primary model comparison, so that inter-subject vascular/neural coupling variability doesn't get entangled with the question this project is actually asking (how well do different modeling approaches fit hemodynamic dynamics?). Comparing model fits across diagnostic groups is a different, follow-on question — see Section 7 for how this could extend toward the masters project.
+
+## 5. Region of interest: Left primary motor cortex (M1, hand area)
+
+Chosen because:
+- The Go-trial response is a button press, so M1 (contralateral to the responding hand) has a strong, well-localized, high-SNR BOLD response tightly time-locked to the task events — ideal for a first pass at fitting and comparing models.
+- It's the same region used in the original Buxton/Friston balloon-model papers, so there's a direct literature baseline for expected parameter ranges.
+- **Note:** most LA5c subjects are right-handed (respond with the right hand), which is why left M1 is the default — but confirm per-subject response hand from the task event files, since a few subjects may differ.
+
+## 6. Repo / deliverables
+
+- Data loading + BIDS handling
+- Design matrix / input function `u(t)` construction from Go-trial event timing
+- Balloon model forward simulation + classical parameter fitting
+- PINN implementation
+- CoSTA implementation
+- SINDy implementation
+- Comparison metrics + figures
+- Final written report
+
+## 7. Open questions / possible extensions (not yet decided)
+
+- Add "Stop" trials as a second regressor for a richer input function
+- Extend the fitted framework to one clinical group (e.g. schizophrenia) from LA5c, to connect this project more directly to the masters work
+- Bring in DMD as a purely data-driven baseline
+- Explore DON (and possibly FMO — confirm what this refers to in the course) for operator-learning-based stimulus→BOLD mapping
+
+---
+*This file is meant to be edited directly — update it as decisions change, and share it with any AI assistant helping on this project so it has the current scope.*
