@@ -207,4 +207,5 @@ if __name__ == "__main__":
         axis.grid(True, alpha=0.3)
     axes[-1].set_xlabel("Time (s)")
     figure.tight_layout()
+    plt.savefig("results/balloon_model_simulation.png")
     plt.show()
