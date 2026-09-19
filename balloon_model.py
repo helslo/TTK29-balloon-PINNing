@@ -198,9 +198,11 @@ if __name__ == "__main__":
         dt=example_dt,
     )
 
-    labels = ["s (signal)", "f (CBF)", "v (volume)", "q (deoxyhemoglobin)", "BOLD"]
-    values = [states[0], states[1], states[2], states[3], bold]
-    figure, axes = plt.subplots(5, 1, figsize=(9, 10), sharex=True)
+    input_trace = np.array([example_input(t) for t in time])
+
+    labels = ["u(t) (input)", "s (signal)", "f (CBF)", "v (volume)", "q (deoxyhemoglobin)", "BOLD"]
+    values = [input_trace, states[0], states[1], states[2], states[3], bold]
+    figure, axes = plt.subplots(6, 1, figsize=(9, 12), sharex=True)
     for axis, label, value in zip(axes, labels, values):
         axis.plot(time, value)
         axis.set_ylabel(label)
