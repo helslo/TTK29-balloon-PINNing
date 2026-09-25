@@ -10,7 +10,8 @@ from typing import Dict, Optional, Sequence, Tuple
 
 import numpy as np
 
-from balloon_model import BalloonParams, build_input_function, simulate_balloon
+from balloon_model import BalloonParams, build_input_function, fit_balloon, simulate_balloon
+from data_pipeline import load_subject_timeseries, write_timeseries_csv
 from pinn_model import PINNConfig, predict_pinn, train_pinn
 
 
@@ -39,13 +40,35 @@ def r2_score(target: np.ndarray, prediction: np.ndarray) -> float:
     return float(1.0 - np.sum((target - prediction) ** 2) / denominator) if denominator else float("nan")
 
 
-def save_run(path: Path, times: np.ndarray, input_values: np.ndarray, states: np.ndarray, bold: np.ndarray, metrics: Dict[str, float]) -> None:
+def save_run(
+    path: Path,
+    times: np.ndarray,
+    input_values: np.ndarray,
+    states: np.ndarray,
+    bold: np.ndarray,
+    metrics: Dict[str, float],
+    parameters: Optional[Dict[str, float]] = None,
+) -> None:
     """Save one model run in a portable NumPy archive."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez(path, time=times, input=input_values, states=states, bold=bold, metrics=json.dumps(metrics))
+    np.savez(
+        path,
+        time=times,
+        input=input_values,
+        states=states,
+        bold=bold,
+        metrics=json.dumps(metrics),
+        parameters=json.dumps(parameters or {}),
+    )
 
 
-def run(mode: str, data_path: Optional[Path], output_dir: Path, config: PINNConfig) -> Dict[str, float]:
+def run(
+    mode: str,
+    data_path: Optional[Path],
+    output_dir: Path,
+    config: PINNConfig,
+    fit_physical: bool = True,
+) -> Dict[str, float]:
     """Run one requested model or both models on exactly the same arrays."""
     times, input_values, observed_bold = load_csv(data_path) if data_path else synthetic_data()
     params = BalloonParams()
@@ -53,18 +76,35 @@ def run(mode: str, data_path: Optional[Path], output_dir: Path, config: PINNConf
 
     if mode in ("physical", "compare"):
         input_function = lambda time: float(np.interp(time, times, input_values))
-        physical_time, physical_states, physical_bold = simulate_balloon(input_function, params, (times[0], times[-1]), float(np.median(np.diff(times))))
+        if fit_physical:
+            fit = fit_balloon(times, observed_bold, input_function, params)
+            params = fit.params
+            physical_time, physical_states, physical_bold = simulate_balloon(
+                input_function, params, (times[0], times[-1]), float(np.median(np.diff(times)))
+            )
+        else:
+            physical_time, physical_states, physical_bold = simulate_balloon(
+                input_function, params, (times[0], times[-1]), float(np.median(np.diff(times)))
+            )
         physical_bold = np.interp(times, physical_time, physical_bold)
         physical_states = np.vstack([np.interp(times, physical_time, state) for state in physical_states])
         physical_metrics = {"mse": float(np.mean((observed_bold - physical_bold) ** 2)), "r2": r2_score(observed_bold, physical_bold)}
-        save_run(output_dir / "physical_model.npz", times, input_values, physical_states, physical_bold, physical_metrics)
+        physical_parameters = {
+            name: float(getattr(params, name))
+            for name in ("kappa", "gamma", "tau", "alpha", "E0", "V0", "eps", "nu0", "r0", "epsilon_r", "TE")
+        }
+        save_run(output_dir / "physical_model.npz", times, input_values, physical_states, physical_bold, physical_metrics, physical_parameters)
         metrics.update({f"physical_{key}": value for key, value in physical_metrics.items()})
 
     if mode in ("pinn", "compare"):
         model, history = train_pinn(times, input_values, observed_bold, params, config)
         pinn_states, pinn_bold = predict_pinn(model, times, input_values)
         pinn_metrics = {"mse": float(np.mean((observed_bold - pinn_bold) ** 2)), "r2": r2_score(observed_bold, pinn_bold)}
-        save_run(output_dir / "pinn_model.npz", times, input_values, pinn_states, pinn_bold, pinn_metrics)
+        pinn_parameters = {
+            name: float(getattr(params, name))
+            for name in ("kappa", "gamma", "tau", "alpha", "E0", "V0", "eps", "nu0", "r0", "epsilon_r", "TE")
+        }
+        save_run(output_dir / "pinn_model.npz", times, input_values, pinn_states, pinn_bold, pinn_metrics, pinn_parameters)
         np.savez(output_dir / "pinn_loss.npz", **{key: np.asarray(value) for key, value in history.items()})
         metrics.update({f"pinn_{key}": value for key, value in pinn_metrics.items()})
 
@@ -77,10 +117,36 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("physical", "pinn", "compare"), default="compare")
     parser.add_argument("--data", type=Path, help="CSV with time,input,bold; defaults to synthetic data")
+    parser.add_argument("--subject", help="BIDS subject ID, for example sub-10159")
+    parser.add_argument("--data-root", type=Path, default=Path("data/ds000030"))
+    parser.add_argument("--bold-path", type=Path, help="Preprocessed BOLD NIfTI; overrides the raw subject path")
+    parser.add_argument("--events-path", type=Path, help="Events TSV; defaults to the subject's raw BIDS events file")
+    parser.add_argument("--roi-mask", type=Path, help="Aligned ROI mask NIfTI for --subject")
     parser.add_argument("--output-dir", type=Path, default=Path("results"))
     parser.add_argument("--epochs", type=int, default=1000)
+    parser.add_argument("--no-fit-physical", action="store_true", help="Use default Balloon parameters")
     args = parser.parse_args(argv)
-    metrics = run(args.mode, args.data, args.output_dir, PINNConfig(epochs=args.epochs))
+    if args.data is not None and args.subject is not None:
+        parser.error("use either --data or --subject, not both")
+    if args.bold_path is not None and args.subject is None:
+        parser.error("--bold-path requires --subject")
+    data_path = args.data
+    if args.subject is not None:
+        if args.roi_mask is None:
+            parser.error("--roi-mask is required with --subject")
+        subject_dir = args.data_root / args.subject / "func"
+        bold_path = args.bold_path or subject_dir / f"{args.subject}_task-stopsignal_bold.nii.gz"
+        events_path = args.events_path or subject_dir / f"{args.subject}_task-stopsignal_events.tsv"
+        times, input_values, observed_bold = load_subject_timeseries(bold_path, events_path, args.roi_mask)
+        data_path = args.output_dir / f"{args.subject}_timeseries.csv"
+        write_timeseries_csv(data_path, times, input_values, observed_bold)
+    metrics = run(
+        args.mode,
+        data_path,
+        args.output_dir,
+        PINNConfig(epochs=args.epochs),
+        fit_physical=not args.no_fit_physical,
+    )
     print(json.dumps(metrics, indent=2))
 
 

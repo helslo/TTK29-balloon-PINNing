@@ -8,6 +8,7 @@ from typing import Callable, Sequence, Tuple
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.integrate import solve_ivp
+from scipy.optimize import least_squares
 
 
 InputFunction = Callable[[float], float]
@@ -31,6 +32,16 @@ class BalloonParams:
     r0: float = 25.0
     epsilon_r: float = 0.47
     TE: float = 0.04
+
+
+@dataclass
+class BalloonFit:
+    """Result of fitting Balloon parameters to one BOLD time series."""
+
+    params: BalloonParams
+    fitted_bold: np.ndarray
+    optimizer_cost: float
+    nfev: int
 
 
 def build_input_function(
@@ -181,6 +192,67 @@ def simulate_balloon(
     states = solution.y
     bold = bold_signal(states[2], states[3], params)
     return solution.t, states, bold
+
+
+def fit_balloon(
+    times: np.ndarray,
+    observed_bold: np.ndarray,
+    u_func: InputFunction,
+    initial_params: BalloonParams | None = None,
+    max_nfev: int = 100,
+) -> BalloonFit:
+    """Fit selected Balloon parameters to an observed BOLD trace.
+
+    The fitted parameters are ``kappa``, ``gamma``, ``tau``, ``alpha``,
+    ``eps``, and ``V0``. Scanner-specific observation parameters remain fixed
+    because they are determined by the acquisition protocol.
+    """
+    times = np.asarray(times, dtype=float)
+    observed_bold = np.asarray(observed_bold, dtype=float)
+    if times.ndim != 1 or observed_bold.ndim != 1 or len(times) != len(observed_bold):
+        raise ValueError("times and observed_bold must be one-dimensional arrays of equal length")
+    if len(times) < 3 or np.any(np.diff(times) <= 0):
+        raise ValueError("times must contain at least three strictly increasing values")
+    if not np.all(np.isfinite(observed_bold)):
+        raise ValueError("observed_bold must contain only finite values")
+    if max_nfev <= 0:
+        raise ValueError("max_nfev must be positive")
+
+    base = initial_params or BalloonParams()
+    names = ("kappa", "gamma", "tau", "alpha", "eps", "V0")
+    initial = np.array([getattr(base, name) for name in names], dtype=float)
+    lower = np.array([0.01, 0.01, 0.05, 0.1, 0.01, 0.001])
+    upper = np.array([5.0, 5.0, 5.0, 1.0, 5.0, 0.2])
+
+    def predict(values: np.ndarray) -> np.ndarray:
+        fitted_params = BalloonParams(
+            kappa=values[0], gamma=values[1], tau=values[2], alpha=values[3],
+            eps=values[4], V0=values[5], E0=base.E0, nu0=base.nu0,
+            r0=base.r0, epsilon_r=base.epsilon_r, TE=base.TE,
+        )
+        try:
+            simulated_times, _, predicted = simulate_balloon(
+                u_func, fitted_params, (float(times[0]), float(times[-1])),
+                float(np.median(np.diff(times))) / 2.0,
+            )
+        except (RuntimeError, ValueError, FloatingPointError):
+            return np.full_like(observed_bold, 1e3)
+        return np.interp(times, simulated_times, predicted)
+
+    result = least_squares(
+        lambda values: predict(values) - observed_bold,
+        initial,
+        bounds=(lower, upper),
+        max_nfev=max_nfev,
+        x_scale="jac",
+    )
+    fitted_params = BalloonParams(
+        kappa=result.x[0], gamma=result.x[1], tau=result.x[2], alpha=result.x[3],
+        eps=result.x[4], V0=result.x[5], E0=base.E0, nu0=base.nu0,
+        r0=base.r0, epsilon_r=base.epsilon_r, TE=base.TE,
+    )
+    fitted_bold = predict(result.x)
+    return BalloonFit(fitted_params, fitted_bold, float(result.cost), result.nfev)
 
 
 if __name__ == "__main__":

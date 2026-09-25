@@ -98,4 +98,42 @@ Outputs are written to `results/` by default. Each model produces a portable
 metrics. PINN runs also save `pinn_loss.npz`; combined runs additionally save
 `comparison_metrics.json`.
 
+### Running a subject from BIDS files
+
+Generate the left-M1 Julich-Brain v3.1 mask with siibra:
+
+```bash
+.venv/bin/python julich_parcellation.py \
+	--output results/julich_left_m1_mask.nii.gz
+```
+
+The default mask is the binary union of `Area 4a (PreCG) left` and `Area 4p
+(PreCG) left`. The command also writes a JSON sidecar describing the atlas,
+space, and selected regions. This mask is in MNI 152 ICBM 2009c Nonlinear
+Asymmetric space.
+
+The repository also accepts a subject's BOLD NIfTI and event TSV directly:
+
+```bash
+.venv/bin/python compare_models.py \
+	--mode compare \
+	--subject sub-10159 \
+	--bold-path /path/to/fmriprep/sub-10159_task-stopsignal_space-MNI152NLin2009cAsym_desc-preproc_bold.nii.gz \
+	--roi-mask /path/to/sub-10159_left-precentral-mask.nii.gz \
+	--epochs 1000 \
+	--output-dir results/sub-10159
+```
+
+The mask must already be aligned to the BOLD image. With `--bold-path`, use an
+fMRIPrep MNI-space BOLD image matching the Julich MNI mask. Without it, the
+command uses the raw image under `--data-root`; an MNI mask must not be applied
+to that scanner-space image directly.
+
+The subject path creates `results/sub-10159/sub-10159_timeseries.csv` with
+`time`, `input`, and baseline-normalized `bold` columns, then feeds that exact
+series to both models. GO trials with `TrialOutcome == SuccessfulGo` form the
+initial input; STOP trials can be added later as a second input channel.
+The physical model is fitted by default. Use `--no-fit-physical` only for a
+fixed-parameter forward simulation.
+
 ---
