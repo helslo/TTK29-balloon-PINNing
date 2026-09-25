@@ -123,6 +123,36 @@ uv run python3 read_results.py results/25.09.26_18.02.43_physical/physical_model
 Archives created before `observed_bold` was added can still be summarized, but
 their plots cannot show the observed BOLD trace.
 
+### PINN training details
+
+The PINN uses a normalized time coordinate (`0` to `1`) internally. Its
+derivatives are converted back to seconds before the Balloon ODE residual is
+computed, which avoids saturating the Tanh network over a long 30-second time
+interval. The BOLD data loss is normalized by the observed BOLD standard
+deviation, and both data and physics losses are additionally normalized by
+their initial values.
+
+The flow, volume, and deoxyhemoglobin states use positive exponential
+parameterizations with the required initial value of one. This prevents the
+network from exploiting the previous artificial lower bound of `0.05` for
+flow. ODE residuals are not evaluated exactly at input-pulse discontinuities,
+where a smooth neural trajectory cannot satisfy both one-sided equations.
+
+The default PINN uses a 64-unit, three-hidden-layer network, reduces the
+learning rate when the total loss stops improving, and finishes with an LBFGS
+refinement phase. The default weights are `data_weight=1` and
+`physics_weight=1`; these can be adjusted in `PINNConfig` when experimenting
+with the data/physics trade-off. More epochs are still useful for convergence,
+for example:
+
+```bash
+uv run python3 compare_models.py --mode compare --epochs 10000
+```
+
+The physical model remains the expected accuracy baseline: it directly
+integrates the ODE and optimizes its parameters, while the PINN must learn a
+neural approximation to the complete state trajectory.
+
 ### Running a subject from BIDS files
 
 Generate the left-M1 Julich-Brain v3.1 mask with siibra:

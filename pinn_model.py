@@ -19,34 +19,38 @@ class PINNConfig:
     epochs: int = 1000
     learning_rate: float = 1e-3
     physics_weight: float = 1.0
-    data_weight: float = 10.0
-    hidden_width: int = 32
+    data_weight: float = 1.0
+    hidden_width: int = 64
     hidden_layers: int = 3
+    lbfgs_steps: int = 100
     seed: int = 7
 
 
 class BalloonPINN(nn.Module):
     """Neural state trajectory constrained by the Balloon ODE."""
 
-    def __init__(self, params: BalloonParams, hidden_width: int = 32, hidden_layers: int = 3):
+    def __init__(self, params: BalloonParams, duration: float, hidden_width: int = 64, hidden_layers: int = 3):
         super().__init__()
+        if duration <= 0:
+            raise ValueError("duration must be positive")
         layers = [nn.Linear(1, hidden_width), nn.Tanh()]
         for _ in range(hidden_layers - 1):
             layers.extend([nn.Linear(hidden_width, hidden_width), nn.Tanh()])
         layers.append(nn.Linear(hidden_width, 4))
         self.network = nn.Sequential(*layers)
         self.params = params
+        self.duration = duration
 
     def forward(self, time: torch.Tensor) -> torch.Tensor:
         """Return states ``[s, f, v, q]`` with the physical initial state enforced."""
         raw = self.network(time)
-        elapsed = time[:, 0:1]
+        elapsed = time[:, 0:1] * self.duration
         return torch.cat(
             [
                 elapsed * raw[:, 0:1],
-                1.0 + 0.95 * torch.tanh(elapsed * raw[:, 1:2]),
-                1.0 + 0.95 * torch.tanh(elapsed * raw[:, 2:3]),
-                1.0 + 0.95 * torch.tanh(elapsed * raw[:, 3:4]),
+                torch.exp(0.1 * elapsed * torch.tanh(raw[:, 1:2])),
+                torch.exp(0.1 * elapsed * torch.tanh(raw[:, 2:3])),
+                torch.exp(0.1 * elapsed * torch.tanh(raw[:, 3:4])),
             ],
             dim=1,
         )
@@ -58,7 +62,7 @@ class BalloonPINN(nn.Module):
             [torch.autograd.grad(states[:, index].sum(), time, create_graph=True)[0][:, 0:1]
              for index in range(4)],
             dim=1,
-        )
+        ) / self.duration
         s, flow, volume, deoxy = states.unbind(dim=1)
         params = self.params
         extraction = 1.0 - (1.0 - params.E0) ** (1.0 / flow)
@@ -94,6 +98,8 @@ def train_pinn(
         config = PINNConfig()
     if config.epochs <= 0:
         raise ValueError("epochs must be positive")
+    if config.lbfgs_steps < 0:
+        raise ValueError("lbfgs_steps must be non-negative")
 
     times = np.asarray(times, dtype=np.float32)
     input_values = np.asarray(input_values, dtype=np.float32)
@@ -106,23 +112,74 @@ def train_pinn(
         raise ValueError("times must be strictly increasing and start at or after zero")
 
     torch.manual_seed(config.seed)
-    time_tensor = torch.tensor((times - times[0])[:, None], requires_grad=True)
+    duration = float(times[-1] - times[0])
+    time_tensor = torch.tensor(
+        ((times - times[0]) / duration)[:, None],
+        requires_grad=True,
+    )
     input_tensor = torch.tensor(input_values)
     target_tensor = torch.tensor(observed_bold[:, None])
-    model = BalloonPINN(params, config.hidden_width, config.hidden_layers)
+    smooth_mask = np.ones(len(times), dtype=bool)
+    if len(input_values) > 2:
+        smooth_mask[1:-1] = (
+            np.isclose(input_values[1:-1], input_values[:-2])
+            & np.isclose(input_values[1:-1], input_values[2:])
+        )
+    physics_mask = torch.tensor(smooth_mask)
+    model = BalloonPINN(params, duration, config.hidden_width, config.hidden_layers)
     optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, factor=0.5, patience=max(100, config.epochs // 20), min_lr=1e-5
+    )
     history: Dict[str, list] = {"total": [], "data": [], "physics": []}
+    bold_scale = max(float(np.std(observed_bold)), 1e-6)
+
+    def calculate_losses() -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        residual, predicted_bold = model.residuals(time_tensor, input_tensor)
+        data_loss = torch.mean(((predicted_bold[:, None] - target_tensor) / bold_scale) ** 2)
+        physics_residual = residual[physics_mask]
+        physics_loss = torch.mean(physics_residual ** 2)
+        return data_loss, physics_loss, predicted_bold
+
+    initial_data_loss, initial_physics_loss, _ = calculate_losses()
+    data_scale = max(float(initial_data_loss.detach()), 1e-6)
+    physics_scale = max(float(initial_physics_loss.detach()), 1e-6)
+
+    def total_loss() -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        data_loss, physics_loss, predicted_bold = calculate_losses()
+        normalized_data = data_loss / data_scale
+        normalized_physics = physics_loss / physics_scale
+        total = config.data_weight * normalized_data + config.physics_weight * normalized_physics
+        return total, data_loss, physics_loss
 
     for _ in range(config.epochs):
         optimizer.zero_grad()
-        residual, predicted_bold = model.residuals(time_tensor, input_tensor)
-        data_loss = torch.mean((predicted_bold[:, None] - target_tensor) ** 2)
-        physics_loss = torch.mean(residual ** 2)
-        total_loss = config.data_weight * data_loss + config.physics_weight * physics_loss
-        total_loss.backward()
+        loss, data_loss, physics_loss = total_loss()
+        loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
-        history["total"].append(float(total_loss.detach()))
+        scheduler.step(loss.detach())
+        history["total"].append(float(loss.detach()))
+        history["data"].append(float(data_loss.detach()))
+        history["physics"].append(float(physics_loss.detach()))
+
+    if config.lbfgs_steps:
+        lbfgs = torch.optim.LBFGS(
+            model.parameters(),
+            max_iter=config.lbfgs_steps,
+            history_size=50,
+            line_search_fn="strong_wolfe",
+        )
+
+        def closure() -> torch.Tensor:
+            lbfgs.zero_grad()
+            loss, _, _ = total_loss()
+            loss.backward()
+            return loss
+
+        lbfgs.step(closure)
+        loss, data_loss, physics_loss = total_loss()
+        history["total"].append(float(loss.detach()))
         history["data"].append(float(data_loss.detach()))
         history["physics"].append(float(physics_loss.detach()))
     return model, history
@@ -131,7 +188,11 @@ def train_pinn(
 def predict_pinn(model: BalloonPINN, times: np.ndarray, input_values: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """Evaluate a trained PINN and return states and BOLD values."""
     normalized_times = np.asarray(times, dtype=np.float32)
-    time_tensor = torch.tensor((normalized_times - normalized_times[0])[:, None], requires_grad=True)
+    duration = float(normalized_times[-1] - normalized_times[0])
+    time_tensor = torch.tensor(
+        ((normalized_times - normalized_times[0]) / duration)[:, None],
+        requires_grad=True,
+    )
     with torch.no_grad():
         states = model(time_tensor).numpy()
     params = model.params
