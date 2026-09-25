@@ -93,10 +93,35 @@ three columns: `time`, `input`, and `bold`. The same CSV is passed to both
 models in `compare` mode, so the comparison does not change the input grid or
 observations between methods.
 
-Outputs are written to `results/` by default. Each model produces a portable
+Outputs are written to a timestamped folder under `results/` by default. For
+example, a physical-model run at 25 September 2026 at 18:02:43 is saved in
+`results/25.09.26_18.02.43_physical/`; a comparison with 1000 epochs uses
+`results/25.09.26_18.02.43_compare_epochs1000/`. Each model produces a portable
 `.npz` archive containing `time`, `input`, `states`, `bold`, and JSON-encoded
-metrics. PINN runs also save `pinn_loss.npz`; combined runs additionally save
-`comparison_metrics.json`.
+metrics, plus `observed_bold` for direct inspection. PINN runs also save
+`pinn_loss.npz`; combined runs additionally save `comparison_metrics.json`.
+
+Use `--output-dir` to choose a specific directory instead of the timestamped
+default. Existing files in an explicitly supplied directory may be overwritten.
+
+### Reading saved results
+
+Use `read_results.py` to get a human-readable summary of metrics, fitted
+parameters, array sizes, and PINN loss reduction:
+
+```bash
+uv run python3 read_results.py results/25.09.26_18.02.43_compare_epochs1000
+```
+
+Add `--plot` to save `results_summary.png` in that run directory. You can also
+read one model archive directly:
+
+```bash
+uv run python3 read_results.py results/25.09.26_18.02.43_physical/physical_model.npz
+```
+
+Archives created before `observed_bold` was added can still be summarized, but
+their plots cannot show the observed BOLD trace.
 
 ### Running a subject from BIDS files
 

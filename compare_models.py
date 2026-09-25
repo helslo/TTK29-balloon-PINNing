@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional, Sequence, Tuple
 
@@ -40,10 +41,18 @@ def r2_score(target: np.ndarray, prediction: np.ndarray) -> float:
     return float(1.0 - np.sum((target - prediction) ** 2) / denominator) if denominator else float("nan")
 
 
+def default_output_dir(mode: str, epochs: int, base_dir: Path = Path("results")) -> Path:
+    """Return a timestamped directory for a command-line run."""
+    timestamp = datetime.now().strftime("%d.%m.%y_%H.%M.%S")
+    epoch_suffix = f"_epochs{epochs}" if mode in ("pinn", "compare") else ""
+    return base_dir / f"{timestamp}_{mode}{epoch_suffix}"
+
+
 def save_run(
     path: Path,
     times: np.ndarray,
     input_values: np.ndarray,
+    observed_bold: np.ndarray,
     states: np.ndarray,
     bold: np.ndarray,
     metrics: Dict[str, float],
@@ -55,6 +64,7 @@ def save_run(
         path,
         time=times,
         input=input_values,
+        observed_bold=observed_bold,
         states=states,
         bold=bold,
         metrics=json.dumps(metrics),
@@ -93,7 +103,7 @@ def run(
             name: float(getattr(params, name))
             for name in ("kappa", "gamma", "tau", "alpha", "E0", "V0", "eps", "nu0", "r0", "epsilon_r", "TE")
         }
-        save_run(output_dir / "physical_model.npz", times, input_values, physical_states, physical_bold, physical_metrics, physical_parameters)
+        save_run(output_dir / "physical_model.npz", times, input_values, observed_bold, physical_states, physical_bold, physical_metrics, physical_parameters)
         metrics.update({f"physical_{key}": value for key, value in physical_metrics.items()})
 
     if mode in ("pinn", "compare"):
@@ -104,7 +114,7 @@ def run(
             name: float(getattr(params, name))
             for name in ("kappa", "gamma", "tau", "alpha", "E0", "V0", "eps", "nu0", "r0", "epsilon_r", "TE")
         }
-        save_run(output_dir / "pinn_model.npz", times, input_values, pinn_states, pinn_bold, pinn_metrics, pinn_parameters)
+        save_run(output_dir / "pinn_model.npz", times, input_values, observed_bold, pinn_states, pinn_bold, pinn_metrics, pinn_parameters)
         np.savez(output_dir / "pinn_loss.npz", **{key: np.asarray(value) for key, value in history.items()})
         metrics.update({f"pinn_{key}": value for key, value in pinn_metrics.items()})
 
@@ -122,7 +132,11 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     parser.add_argument("--bold-path", type=Path, help="Preprocessed BOLD NIfTI; overrides the raw subject path")
     parser.add_argument("--events-path", type=Path, help="Events TSV; defaults to the subject's raw BIDS events file")
     parser.add_argument("--roi-mask", type=Path, help="Aligned ROI mask NIfTI for --subject")
-    parser.add_argument("--output-dir", type=Path, default=Path("results"))
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        help="Directory for results; defaults to a timestamped folder under results/",
+    )
     parser.add_argument("--epochs", type=int, default=1000)
     parser.add_argument("--no-fit-physical", action="store_true", help="Use default Balloon parameters")
     args = parser.parse_args(argv)
@@ -130,6 +144,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         parser.error("use either --data or --subject, not both")
     if args.bold_path is not None and args.subject is None:
         parser.error("--bold-path requires --subject")
+    output_dir = args.output_dir or default_output_dir(args.mode, args.epochs)
     data_path = args.data
     if args.subject is not None:
         if args.roi_mask is None:
@@ -138,16 +153,17 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         bold_path = args.bold_path or subject_dir / f"{args.subject}_task-stopsignal_bold.nii.gz"
         events_path = args.events_path or subject_dir / f"{args.subject}_task-stopsignal_events.tsv"
         times, input_values, observed_bold = load_subject_timeseries(bold_path, events_path, args.roi_mask)
-        data_path = args.output_dir / f"{args.subject}_timeseries.csv"
+        data_path = output_dir / f"{args.subject}_timeseries.csv"
         write_timeseries_csv(data_path, times, input_values, observed_bold)
     metrics = run(
         args.mode,
         data_path,
-        args.output_dir,
+        output_dir,
         PINNConfig(epochs=args.epochs),
         fit_physical=not args.no_fit_physical,
     )
     print(json.dumps(metrics, indent=2))
+    print("Ran successfully")
 
 
 if __name__ == "__main__":
