@@ -75,4 +75,27 @@ Chosen because:
 - Bring in DMD as a purely data-driven baseline
 - Explore DON (and possibly FMO — confirm what this refers to in the course) for operator-learning-based stimulus→BOLD mapping
 
+## 8. Running the current physical/PINN comparison
+
+The first implementation keeps the physical model and PINN independent while
+giving them the same experiment interface. Run from the repository root with
+the project environment:
+
+```bash
+.venv/bin/python compare_models.py --mode physical
+.venv/bin/python compare_models.py --mode pinn --epochs 1000
+.venv/bin/python compare_models.py --mode compare --epochs 1000
+```
+
+With no `--data` argument, these commands use a deterministic synthetic
+Balloon-model trace. A real experiment can be supplied as a CSV containing
+three columns: `time`, `input`, and `bold`. The same CSV is passed to both
+models in `compare` mode, so the comparison does not change the input grid or
+observations between methods.
+
+Outputs are written to `results/` by default. Each model produces a portable
+`.npz` archive containing `time`, `input`, `states`, `bold`, and JSON-encoded
+metrics. PINN runs also save `pinn_loss.npz`; combined runs additionally save
+`comparison_metrics.json`.
+
 ---
