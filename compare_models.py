@@ -12,6 +12,7 @@ from typing import Dict, Optional, Sequence, Tuple
 import numpy as np
 
 from balloon_model import BalloonParams, build_input_function, fit_balloon, simulate_balloon
+from costa_model import CoSTAConfig, predict_costa, train_costa
 from data_pipeline import load_subject_timeseries, write_timeseries_csv
 from pinn_model import PINNConfig, predict_pinn, train_pinn
 
@@ -44,7 +45,7 @@ def r2_score(target: np.ndarray, prediction: np.ndarray) -> float:
 def default_output_dir(mode: str, epochs: int, base_dir: Path = Path("results")) -> Path:
     """Return a timestamped directory for a command-line run."""
     timestamp = datetime.now().strftime("%d.%m.%y_%H.%M.%S")
-    epoch_suffix = f"_epochs{epochs}" if mode in ("pinn", "compare") else ""
+    epoch_suffix = f"_epochs{epochs}" if mode in ("pinn", "costa", "compare") else ""
     return base_dir / f"{timestamp}_{mode}{epoch_suffix}"
 
 
@@ -84,7 +85,7 @@ def run(
     params = BalloonParams()
     metrics: Dict[str, float] = {}
 
-    if mode in ("physical", "compare"):
+    if mode in ("physical", "costa", "compare"):
         input_function = lambda time: float(np.interp(time, times, input_values))
         if fit_physical:
             fit = fit_balloon(times, observed_bold, input_function, params)
@@ -118,6 +119,38 @@ def run(
         np.savez(output_dir / "pinn_loss.npz", **{key: np.asarray(value) for key, value in history.items()})
         metrics.update({f"pinn_{key}": value for key, value in pinn_metrics.items()})
 
+    if mode in ("costa", "compare"):
+        costa_model, costa_history = train_costa(
+            times,
+            input_values,
+            observed_bold,
+            physical_states,
+            physical_bold,
+            CoSTAConfig(epochs=config.epochs),
+        )
+        costa_states, costa_bold = predict_costa(
+            costa_model, times, input_values, physical_states, physical_bold
+        )
+        costa_metrics = {
+            "mse": float(np.mean((observed_bold - costa_bold) ** 2)),
+            "r2": r2_score(observed_bold, costa_bold),
+        }
+        save_run(
+            output_dir / "costa_model.npz",
+            times,
+            input_values,
+            observed_bold,
+            costa_states,
+            costa_bold,
+            costa_metrics,
+            physical_parameters,
+        )
+        np.savez(
+            output_dir / "costa_loss.npz",
+            **{key: np.asarray(value) for key, value in costa_history.items()},
+        )
+        metrics.update({f"costa_{key}": value for key, value in costa_metrics.items()})
+
     if mode == "compare":
         (output_dir / "comparison_metrics.json").write_text(json.dumps(metrics, indent=2) + "\n")
     return metrics
@@ -125,7 +158,7 @@ def run(
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mode", choices=("physical", "pinn", "compare"), default="compare")
+    parser.add_argument("--mode", choices=("physical", "pinn", "costa", "compare"), default="compare")
     parser.add_argument("--data", type=Path, help="CSV with time,input,bold; defaults to synthetic data")
     parser.add_argument("--subject", help="BIDS subject ID, for example sub-10159")
     parser.add_argument("--data-root", type=Path, default=Path("data/ds000030"))

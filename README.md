@@ -75,7 +75,7 @@ Chosen because:
 - Bring in DMD as a purely data-driven baseline
 - Explore DON (and possibly FMO — confirm what this refers to in the course) for operator-learning-based stimulus→BOLD mapping
 
-## 8. Running the current physical/PINN comparison
+## 8. Running the physical/PINN/CoSTA comparison
 
 The first implementation keeps the physical model and PINN independent while
 giving them the same experiment interface. Run from the repository root with
@@ -84,6 +84,7 @@ the project environment:
 ```bash
 .venv/bin/python compare_models.py --mode physical
 .venv/bin/python compare_models.py --mode pinn --epochs 1000
+.venv/bin/python compare_models.py --mode costa --epochs 1000
 .venv/bin/python compare_models.py --mode compare --epochs 1000
 ```
 
@@ -98,8 +99,9 @@ example, a physical-model run at 25 September 2026 at 18:02:43 is saved in
 `results/25.09.26_18.02.43_physical/`; a comparison with 1000 epochs uses
 `results/25.09.26_18.02.43_compare_epochs1000/`. Each model produces a portable
 `.npz` archive containing `time`, `input`, `states`, `bold`, and JSON-encoded
-metrics, plus `observed_bold` for direct inspection. PINN runs also save
-`pinn_loss.npz`; combined runs additionally save `comparison_metrics.json`.
+metrics, plus `observed_bold` for direct inspection. PINN and CoSTA runs also
+save `pinn_loss.npz` and `costa_loss.npz`, respectively; combined runs
+additionally save `comparison_metrics.json`.
 
 Use `--output-dir` to choose a specific directory instead of the timestamped
 default. Existing files in an explicitly supplied directory may be overwritten.
@@ -152,6 +154,55 @@ uv run python3 compare_models.py --mode compare --epochs 10000
 The physical model remains the expected accuracy baseline: it directly
 integrates the ODE and optimizes its parameters, while the PINN must learn a
 neural approximation to the complete state trajectory.
+
+### CoSTA model and training details
+
+CoSTA keeps the fitted Balloon model as its physical core and learns an
+additive correction in **BOLD observation space**. The correction network
+receives normalized time, task input, the four physical states, and the
+physical BOLD prediction. The saved CoSTA state trajectory is therefore the
+physical model's trajectory; CoSTA changes the predicted BOLD signal, not the
+Balloon ODE states. In `compare` mode all three models use the same observations
+and input; CoSTA and PINN both use the fitted physical parameters as their
+physical reference.
+
+The correction network is initialized to output zero, so training starts at
+the physical baseline. Its output is bounded to three training-residual
+standard deviations and forced to zero at the start of the time series. Input
+features and residual targets are scaled using training samples only. The
+training objective combines normalized residual error with correction-size
+and second-difference smoothness penalties; AdamW weight decay, gradient
+clipping, a validation-driven learning-rate scheduler, and early stopping
+limit an unconstrained correction from simply chasing each sample. The best
+validation checkpoint is restored. Defaults are a 32-unit, two-layer network,
+1,000 maximum epochs, and 100 epochs of patience; the shared `--epochs`
+argument changes the maximum epoch count.
+
+For an initial reproducible check, the current trainer was tested on synthetic
+Balloon output with a smooth sinusoidal discrepancy added. On every fifth
+sample held out from the residual fit, MSE decreased from `7.87e-6` for the
+physical prediction to `1.69e-6` after correction, while the state trajectory
+remained identical. This is a smoke check, not evidence of trial- or
+subject-level generalization: adjacent fMRI samples are autocorrelated, so
+scientific comparisons should later hold out complete trials or subjects and
+report those results separately.
+
+CoSTA saves `costa_model.npz` (corrected BOLD, physical states, metrics, and
+physical parameters) and `costa_loss.npz` (training loss, validation loss, and
+correction RMS). Run just the hybrid model with:
+
+```bash
+.venv/bin/python compare_models.py --mode costa --epochs 1000
+```
+
+The earlier PINN implementation also needed several practical corrections
+before it trained usefully: normalized time with derivatives converted back
+to seconds, positive flow/volume/deoxyhemoglobin states with the correct
+initial values, exclusion of input-pulse discontinuities from ODE residuals,
+normalized losses, learning-rate reduction, and an LBFGS refinement phase.
+Those constraints are retained in `pinn_model.py`; the CoSTA residual learner
+uses separate safeguards suited to a supervised residual rather than
+reusing the PINN's ODE-residual objective.
 
 ### Running a subject from BIDS files
 
