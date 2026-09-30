@@ -48,15 +48,28 @@ def print_model_summary(path: Path) -> Dict[str, float]:
 
 
 def print_loss_summary(path: Path) -> None:
-    """Print the first and final PINN losses when available."""
+    """Print the first and final losses when a training archive is available."""
     if not path.exists():
         return
     with np.load(path, allow_pickle=False) as losses:
         print(f"\n{path.name}")
-        print(f"  epochs: {len(losses['total'])}")
-        for name in ("total", "data", "physics"):
-            values = losses[name]
-            print(f"  {name} loss: {values[0]:.6g} -> {values[-1]:.6g}")
+        keys = list(losses.files)
+        if set(("total", "data", "physics")).issubset(keys):
+            print(f"  epochs: {len(losses['total'])}")
+            for name in ("total", "data", "physics"):
+                values = losses[name]
+                print(f"  {name} loss: {values[0]:.6g} -> {values[-1]:.6g}")
+            return
+        if set(("train", "validation")).issubset(keys):
+            print(f"  epochs: {len(losses['train'])}")
+            for name in ("train", "validation"):
+                values = losses[name]
+                print(f"  {name} loss: {values[0]:.6g} -> {values[-1]:.6g}")
+            if "correction_rms" in keys:
+                values = losses["correction_rms"]
+                print(f"  correction_rms: {values[0]:.6g} -> {values[-1]:.6g}")
+            return
+        print(f"  keys: {', '.join(keys)}")
 
 
 def plot_run(run_dir: Path, model_files: Sequence[Path]) -> Path:
@@ -65,14 +78,22 @@ def plot_run(run_dir: Path, model_files: Sequence[Path]) -> Path:
 
     figure, axes = plt.subplots(2, 1, figsize=(10, 7), sharex=True)
     input_plotted = False
-    for model_path in model_files:
+    model_files = list(model_files)
+    for index, model_path in enumerate(model_files):
         with np.load(model_path, allow_pickle=False) as result:
             time = result["time"]
             if "observed_bold" in result and not input_plotted:
-                axes[0].plot(time, result["observed_bold"], color="black", label="observed")
-            axes[0].plot(time, result["bold"], label=model_path.stem.replace("_model", ""))
+                axes[0].plot(time, result["observed_bold"], color="black", linewidth=2.0, label="observed")
+            width = max(1.0, 3.0 - 0.6 * index)
+            axes[0].plot(
+                time,
+                result["bold"],
+                linewidth=width,
+                alpha=0.9,
+                label=model_path.stem.replace("_model", ""),
+            )
             if not input_plotted:
-                axes[1].plot(time, result["input"], color="tab:green", label="input")
+                axes[1].plot(time, result["input"], color="tab:green", linewidth=1.8, label="input")
                 input_plotted = True
     axes[0].set_ylabel("BOLD")
     axes[1].set_ylabel("Input")
@@ -96,7 +117,15 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     if not model_files:
         raise SystemExit(f"No model archives found in {args.path}")
     all_metrics = {path.stem.replace("_model", ""): print_model_summary(path) for path in model_files}
-    print_loss_summary(args.path / "pinn_loss.npz" if args.path.is_dir() else args.path.parent / "pinn_loss.npz")
+    if args.path.is_dir():
+        loss_paths = [
+            args.path / "pinn_loss.npz",
+            args.path / "costa_loss.npz",
+        ]
+    else:
+        loss_paths = [args.path.parent / "pinn_loss.npz", args.path.parent / "costa_loss.npz"]
+    for loss_path in loss_paths:
+        print_loss_summary(loss_path)
 
     if len(all_metrics) > 1:
         best_model = min(all_metrics, key=lambda name: all_metrics[name].get("mse", float("inf")))
