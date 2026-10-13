@@ -8,6 +8,9 @@ Compare a **pure physical model** of the BOLD hemodynamic response against **thr
 
 This is a course project (TTK29, 3.75 study points) designed to build modeling skills that feed directly into a related masters project on BOLD-signal analysis in mental health disorders.
 
+Relevant articles:
+- https://www.sciencedirect.com/science/article/pii/S105381190090630X
+
 ## 2. Core physical model: the Balloon(-Windkessel) model
 
 Reference: Buxton, Wong & Frank (1998), *Magnetic Resonance in Medicine* 39(6):855-864, extended by Friston, Mechelli, Turner & Price (2000), *NeuroImage* 12(4):466-477.
