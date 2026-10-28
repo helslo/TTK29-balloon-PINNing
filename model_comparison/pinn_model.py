@@ -9,7 +9,7 @@ import numpy as np
 import torch
 from torch import nn
 
-from balloon_model import BalloonParams
+from .balloon_model import BalloonParams
 
 
 @dataclass
@@ -203,8 +203,3 @@ def predict_pinn(model: BalloonPINN, times: np.ndarray, input_values: np.ndarray
     )
     return states, bold
 
-
-if __name__ == "__main__":
-    from compare_models import main
-
-    main(["--mode", "pinn"])

@@ -15,6 +15,23 @@ def load_json_value(value: np.ndarray) -> Dict[str, float]:
     return json.loads(value.item())
 
 
+def latest_result_path(base_dir: Path = Path("results")) -> Path | None:
+    """Return the newest model archive or run directory under ``base_dir``."""
+    if not base_dir.exists():
+        return None
+
+    candidates: list[Path] = []
+    for child in sorted(base_dir.iterdir(), key=lambda path: path.name):
+        if child.is_file() and child.suffix == ".npz":
+            candidates.append(child)
+        elif child.is_dir():
+            candidates.extend(sorted(child.glob("*_model.npz"), key=lambda path: path.stat().st_mtime))
+
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: path.stat().st_mtime)
+
+
 def find_run_files(path: Path) -> Iterable[Path]:
     """Return result archives found in a run directory or at one file path."""
     if path.is_file():
@@ -109,21 +126,32 @@ def plot_run(run_dir: Path, model_files: Sequence[Path]) -> Path:
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("path", type=Path, help="Run directory or .npz result file")
+    parser.add_argument("path", type=Path, nargs="?", help="Run directory or .npz result file; defaults to the newest run under results/")
     parser.add_argument("--plot", action="store_true", help="Save an observed-versus-predicted plot")
+    parser.add_argument("--latest", action="store_true", help="Explicitly resolve the newest run under results/ before summarizing")
     args = parser.parse_args(argv)
 
-    model_files = list(find_run_files(args.path))
+    if args.latest:
+        resolved_path = latest_result_path()
+    elif args.path is not None:
+        resolved_path = args.path
+    else:
+        resolved_path = latest_result_path() or Path("results")
+
+    if resolved_path is None or not resolved_path.exists():
+        raise SystemExit("No saved results were found under results/. Run a model first or pass an explicit path.")
+
+    model_files = list(find_run_files(resolved_path))
     if not model_files:
-        raise SystemExit(f"No model archives found in {args.path}")
+        raise SystemExit(f"No model archives found in {resolved_path}")
     all_metrics = {path.stem.replace("_model", ""): print_model_summary(path) for path in model_files}
-    if args.path.is_dir():
+    if resolved_path.is_dir():
         loss_paths = [
-            args.path / "pinn_loss.npz",
-            args.path / "costa_loss.npz",
+            resolved_path / "pinn_loss.npz",
+            resolved_path / "costa_loss.npz",
         ]
     else:
-        loss_paths = [args.path.parent / "pinn_loss.npz", args.path.parent / "costa_loss.npz"]
+        loss_paths = [resolved_path.parent / "pinn_loss.npz", resolved_path.parent / "costa_loss.npz"]
     for loss_path in loss_paths:
         print_loss_summary(loss_path)
 
@@ -133,7 +161,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         best_r2 = max(all_metrics, key=lambda name: all_metrics[name].get("r2", float("-inf")))
         print(f"                 {best_r2} has the highest R2.")
     if args.plot:
-        plot_dir = args.path if args.path.is_dir() else args.path.parent
+        plot_dir = resolved_path if resolved_path.is_dir() else resolved_path.parent
         print(f"\nSaved plot: {plot_run(plot_dir, model_files)}")
 
 

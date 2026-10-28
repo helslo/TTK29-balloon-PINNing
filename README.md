@@ -11,7 +11,97 @@ This is a course project (TTK29, 3.75 study points) designed to build modeling s
 Relevant articles:
 - https://www.sciencedirect.com/science/article/pii/S105381190090630X
 
-## 2. Core physical model: the Balloon(-Windkessel) model
+## 2. Quick start and project workflow
+
+The project now exposes a single, minimal CLI entry point that routes to the main pipelines without remembering many raw script names:
+
+```bash
+# full comparison with editable settings at the top of the runner
+uv run python run_comparison_analysis.py
+
+# physical model baseline
+uv run python -m ttk29_balloon_pinning physical --epochs 2000
+
+# PINN training
+uv run python -m ttk29_balloon_pinning pinn --epochs 2000
+
+# CoSTA residual correction
+uv run python -m ttk29_balloon_pinning costa --epochs 2000
+
+# full comparison of all methods on the same dataset
+uv run python -m ttk29_balloon_pinning compare --epochs 2000
+
+# sparse sensor placement / compressed sensing analysis
+uv run python -m ttk29_balloon_pinning sensor --k-max 10
+
+# summarize and plot the newest saved run automatically
+uv run python -m ttk29_balloon_pinning latest --plot
+```
+
+If no explicit run path is given to the summary tools, they automatically resolve the newest directory beneath `results/` and plot that run by default. This keeps the workflow lightweight and avoids manually finding the last comparison folder after a training run.
+
+The model comparison implementation and its Balloon, PINN, CoSTA, and BIDS
+timeseries modules are organized in the `model_comparison` package. For a
+simple, readable run, edit the constants at the top of
+`run_comparison_analysis.py` (mode, epochs, input data, and output directory)
+and execute that file. The package can also be run with
+`python -m model_comparison`.
+
+## 3. Theory primer: the math behind the models
+
+### 3.1 Balloon-Windkessel model
+
+The baseline model is a reduced dynamical system for the neurovascular response. Let `u(t)` denote the neuronal drive, and let `s(t)`, `f(t)`, `v(t)`, and `q(t)` denote the vasodilatory signal, flow, volume, and deoxyhemoglobin content. The system is
+
+```text
+ds/dt = ε u(t) - κ s - γ (f - 1)
+df/dt = s
+dv/dt = (f - v^(1/α)) / τ
+dq/dt = [f * E(u) / E0 - (v^(1/α) / v) q] / τ
+```
+
+where `E(u)` is the flow-dependent oxygen extraction term. The BOLD signal is then computed from the static observation equation
+
+```text
+BOLD(t) = V0 [k1 (1 - q) + k2 (1 - q / v) + k3 (1 - v)]
+```
+
+with `k1`, `k2`, and `k3` determined by the echo time and standard hemodynamic constants. This gives a compact nonlinear ODE that links neuronal input to the measured hemodynamic response.
+
+### 3.2 PINN formulation
+
+A physics-informed neural network does not replace the Balloon model; it learns a surrogate state trajectory while embedding the residual of the governing ODE into the loss. If the network predicts `s_hat(t), f_hat(t), v_hat(t), q_hat(t)`, the training objective includes both a data-fit term and the ODE residual term:
+
+```text
+L = L_data + λ L_physics
+```
+
+where `L_data` measures the mismatch to observed BOLD, and `L_physics` penalizes the residual of the differential equations. This is useful because it combines direct measurements with a mechanistic inductive bias: the solution is not just “close to the data,” but also consistent with the physically informed dynamics.
+
+### 3.3 CoSTA residual correction
+
+CoSTA can be viewed as a hybrid model in which the physical balloon solution remains the backbone and a learned correction term accounts for the part the physics model misses. In effect, the model estimates
+
+```text
+y_hat(t) = y_physical(t) + r_θ(t)
+```
+
+where `r_θ(t)` is a learned residual correction. This makes the method more interpretable than a fully data-driven model because the mechanistic structure remains present while the neural network adapts to systematic bias or unmodeled dynamics.
+
+### 3.4 Sparse sensor placement and compressed sensing
+
+For ROI-based fMRI analysis, suppose each ROI is a row of a matrix `X ∈ R^{n_rois × n_time}` after z-scoring over time. The goal is to observe only `k << n_rois` rows (sensors) and reconstruct the full matrix from those observations. We therefore solve a reduced problem of the form
+
+```text
+y = M X,
+X_hat = A y,
+```
+
+where `M` selects the measured rows and `A` maps measurements back to the full ROI space. In the simplest formulation, the low-rank basis from the SVD provides the dominant spatial modes, and QR pivoting chooses the rows that best span that subspace. LASSO-based compressed sensing adds a sparse regularizer in a cosine-transform basis to recover coefficients from a limited number of measurements.
+
+This is the core of the sensor-placement workflow: choose a small set of informative ROIs, reconstruct the rest, and evaluate how quickly the error rises as `k` becomes smaller.
+
+## 4. Core physical model: the Balloon(-Windkessel) model
 
 Reference: Buxton, Wong & Frank (1998), *Magnetic Resonance in Medicine* 39(6):855-864, extended by Friston, Mechelli, Turner & Price (2000), *NeuroImage* 12(4):466-477.
 
@@ -85,10 +175,10 @@ giving them the same experiment interface. Run from the repository root with
 the project environment:
 
 ```bash
-.venv/bin/python compare_models.py --mode physical
-.venv/bin/python compare_models.py --mode pinn --epochs 1000
-.venv/bin/python compare_models.py --mode costa --epochs 1000
-.venv/bin/python compare_models.py --mode compare --epochs 1000
+uv run python -m model_comparison --mode physical
+uv run python -m model_comparison --mode pinn --epochs 2000
+uv run python -m model_comparison --mode costa --epochs 2000
+uv run python -m model_comparison --mode compare --epochs 2000
 ```
 
 With no `--data` argument, these commands use a deterministic synthetic
@@ -151,7 +241,7 @@ with the data/physics trade-off. More epochs are still useful for convergence,
 for example:
 
 ```bash
-uv run python3 compare_models.py --mode compare --epochs 10000
+uv run python -m model_comparison --mode compare --epochs 10000
 ```
 
 The physical model remains the expected accuracy baseline: it directly
@@ -195,7 +285,7 @@ physical parameters) and `costa_loss.npz` (training loss, validation loss, and
 correction RMS). Run just the hybrid model with:
 
 ```bash
-.venv/bin/python compare_models.py --mode costa --epochs 1000
+uv run python -m model_comparison --mode costa --epochs 1000
 ```
 
 The earlier PINN implementation also needed several practical corrections
@@ -203,7 +293,7 @@ before it trained usefully: normalized time with derivatives converted back
 to seconds, positive flow/volume/deoxyhemoglobin states with the correct
 initial values, exclusion of input-pulse discontinuities from ODE residuals,
 normalized losses, learning-rate reduction, and an LBFGS refinement phase.
-Those constraints are retained in `pinn_model.py`; the CoSTA residual learner
+Those constraints are retained in `model_comparison/pinn_model.py`; the CoSTA residual learner
 uses separate safeguards suited to a supervised residual rather than
 reusing the PINN's ODE-residual objective.
 
@@ -224,7 +314,7 @@ Asymmetric space.
 The repository also accepts a subject's BOLD NIfTI and event TSV directly:
 
 ```bash
-.venv/bin/python compare_models.py \
+uv run python -m model_comparison \
 	--mode compare \
 	--subject sub-10159 \
 	--bold-path /path/to/fmriprep/sub-10159_task-stopsignal_space-MNI152NLin2009cAsym_desc-preproc_bold.nii.gz \
@@ -246,3 +336,125 @@ The physical model is fitted by default. Use `--no-fit-physical` only for a
 fixed-parameter forward simulation.
 
 ---
+
+
+
+
+
+
+
+## Sparse Sensor Placement & Compressed Sensing Analysis
+
+### Goal
+Estimate how well whole-brain BOLD activity can be reconstructed from only a
+subset of "sensors", and find which sensor locations are the most informative.
+The fully sampled, fMRIPrep-preprocessed ROI-averaged data is treated as ground
+truth. We pretend only k ROIs were measured, reconstruct the rest, and measure
+the error. This is a proxy for sparse modalities (fNIRS, EEG, ECoG), not a
+model of the MRI scanner itself.
+
+### Input data
+- File: `results/ROI_averaged_data.h5` (output of the ROI averaging step).
+- Assumed layout: one BOLD time series per ROI per participant, originally
+  stored as `{participant_ID: {ROI: signal}}`. Verify and adapt the loader.
+- Build, per participant, a matrix `X` of shape `(n_rois, n_timepoints)`.
+- Each ROI time series should be z-scored (zero mean, unit variance) before
+  analysis. Document any further preprocessing in the code.
+
+### Definitions
+- **Sensor**: one ROI (a row of `X`) that we choose to observe.
+- **k**: number of sensors selected.
+- **Reconstruction**: estimate all `n_rois` signals from the `k` observed ones.
+- **Error metric**: normalized RMSE, `||X - X_hat||_F / ||X||_F`, computed on
+  held-out data only. Optionally also report mean per-ROI Pearson correlation.
+
+### Methods to implement
+Implement each method as a separate function in `sensor_placement/methods.py`
+with a common interface: given training data and `k`, return the selected
+sensor indices and a reconstruction function.
+
+1. **Random placement (baseline).** Choose `k` ROIs uniformly at random.
+   Repeat for many random draws (e.g. 50) and report mean and std of the
+   error. Reconstruct with least squares in the low-rank basis from method 2.
+2. **Optimal placement via SVD + QR pivoting (SSPOR style).**
+   - Compute the SVD of the training data: `X_train = U S V^T`.
+   - Keep the leading `r` spatial modes `U_r` (shape `n_rois x r`). Choose `r`
+     from the singular value spectrum, and also try `r = k`.
+   - Run QR factorization with column pivoting on `U_r^T`
+     (`scipy.linalg.qr(..., pivoting=True)`). The first `k` pivots are the
+     selected sensor indices.
+   - Reconstruct by estimating mode coefficients from the observed rows
+     (`a = pinv(U_r[sensors, :]) @ y`) and computing `x_hat = U_r @ a`.
+     Consider a small ridge penalty if the system is ill-conditioned.
+3. **Compressed sensing recovery with L1.**
+   - Assume the signal is sparse in a DCT basis along the spatial axis
+     (ROI index) or, alternatively, in a learned dictionary.
+   - Measurement: select the `k` rows given by (a) random placement and
+     (b) the QR-pivoting placement from method 2.
+   - Recover coefficients with LASSO (`sklearn.linear_model.Lasso` or
+     `LassoCV`), then map back to the full signal.
+   - This lets us separate the effect of the placement strategy from the
+     effect of the reconstruction method.
+
+### Evaluation protocol
+- Sweep `k` from 1 up to a sensible maximum (e.g. every value up to
+  `n_rois // 2`, then coarser steps).
+- Two held-out schemes, reported separately:
+  - **Temporal hold-out**: fit the basis and placement on the first ~70% of
+    time points per participant, test on the remaining ~30%.
+  - **Participant hold-out**: fit the basis and placement on a training set of
+    participants, test on unseen participants (use k-fold cross-validation over
+    participants). This is the more honest test of whether one placement
+    generalizes across brains.
+- Never choose sensors or fit the basis using test data.
+- Fix random seeds and save all results (per method, `k`, fold) to
+  `results/sensor_placement/` as CSV or HDF5 so plots can be regenerated
+  without recomputing.
+
+### Visualizations
+Save all figures to `results/sensor_placement/figures/` as PNG (and PDF for the
+report). Use matplotlib; use nilearn plotting for brain figures. Label axes
+with units, and add titles and legends.
+
+1. **Error vs number of sensors.** Line plot, x = `k`, y = normalized RMSE.
+   One line per method (random, QR-pivoting + least squares, random + LASSO,
+   QR-pivoting + LASSO). Random baselines shown as mean with a shaded
+   std band. Make one panel for temporal hold-out and one for participant
+   hold-out.
+2. **Singular value spectrum.** Cumulative explained variance vs number of
+   modes, with a marker at the chosen `r`. Shows how low-rank the data is.
+3. **Selected sensors on the brain.** Using the atlas, plot the first `k`
+   ROIs chosen by QR pivoting (e.g. `k = 5, 10, 20`) on glass-brain or
+   slice views, highlighting the selected ROIs. Use
+   `nilearn.plotting.plot_roi` or `plot_glass_brain`.
+4. **Reconstruction examples.** For one test participant, show true vs
+   reconstructed time series for 3 to 4 ROIs (including one selected
+   sensor and several unobserved ROIs) at a small and a large `k`.
+5. **Per-ROI error map.** Brain map where each ROI is colored by its
+   reconstruction error at a chosen `k`, to show which regions are hard
+   to reconstruct.
+6. **Sensor stability.** Heatmap or bar chart of how often each ROI is
+   selected across cross-validation folds (selection frequency per ROI),
+   showing whether the optimal placement is consistent across participants.
+7. **(Optional) Group comparison.** If diagnosis labels are available for
+   LA5c, compare reconstruction error and selected sensors between diagnosis
+   groups (box plot of error at fixed `k`).
+
+### Suggested file structure
+```
+sensor_placement/
+    data.py        # load HDF5, build X, z-score, train/test splits
+    methods.py     # random, qr_pivot, cs_lasso placement + reconstruction
+    evaluate.py    # k-sweep, hold-out schemes, save results
+    plots.py       # all figures listed above, reading saved results
+    run.py         # CLI entry point, config (k range, r, seeds, paths)
+```
+
+### Implementation notes
+- Add a docstring to every function explaining the math, not just the
+  arguments.
+- Keep each method readable and commented, since the goal is to understand
+  every step.
+- Runs on a single machine should be fine at ROI level; use Slurm only if
+  extended to voxel level.
+- Out of scope for now: voxel-level analysis and k-space undersampling.

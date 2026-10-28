@@ -5,12 +5,14 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
+    "h5py>=3.10",
     "matplotlib>=3.8",
     "nibabel>=5.3",
     "nilearn>=0.12.1",
     "numpy>=2.0.2",
     "openneuro-py>=2023.1.0",
     "pandas>=2.3.3",
+    "scikit-learn>=1.5",
     "scipy>=1.13",
     "siibra>=1.0",
     "torch>=2.2",

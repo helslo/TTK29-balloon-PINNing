@@ -11,10 +11,10 @@ from typing import Dict, Optional, Sequence, Tuple
 
 import numpy as np
 
-from balloon_model import BalloonParams, build_input_function, fit_balloon, simulate_balloon
-from costa_model import CoSTAConfig, predict_costa, train_costa
-from data_pipeline import load_subject_timeseries, write_timeseries_csv
-from pinn_model import PINNConfig, predict_pinn, train_pinn
+from .balloon_model import BalloonParams, build_input_function, fit_balloon, simulate_balloon
+from .costa_model import CoSTAConfig, predict_costa, train_costa
+from .data_pipeline import load_subject_timeseries, write_timeseries_csv
+from .pinn_model import PINNConfig, predict_pinn, train_pinn
 
 
 def synthetic_data(duration: float = 30.0, dt: float = 0.1) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -170,7 +170,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         type=Path,
         help="Directory for results; defaults to a timestamped folder under results/",
     )
-    parser.add_argument("--epochs", type=int, default=1000)
+    parser.add_argument("--epochs", type=int, default=2000)
     parser.add_argument("--no-fit-physical", action="store_true", help="Use default Balloon parameters")
     args = parser.parse_args(argv)
     if args.data is not None and args.subject is not None:
