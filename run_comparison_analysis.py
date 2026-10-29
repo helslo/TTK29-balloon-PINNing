@@ -11,7 +11,7 @@ from model_comparison.run import main
 MODE = "compare"
 EPOCHS = 2000
 
-# Leave DATA_FILE unset to use deterministic synthetic data.
+# Leave DATA_FILE and SUBJECT unset to use the default real BIDS subject.
 DATA_FILE: Path | None = None
 SUBJECT: str | None = None
 ROI_MASK: Path | None = None

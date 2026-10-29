@@ -16,6 +16,8 @@ from .costa_model import CoSTAConfig, predict_costa, train_costa
 from .data_pipeline import load_subject_timeseries, write_timeseries_csv
 from .pinn_model import PINNConfig, predict_pinn, train_pinn
 
+DEFAULT_SUBJECT = "sub-10159"
+
 
 def synthetic_data(duration: float = 30.0, dt: float = 0.1) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Create a deterministic dataset for development and model comparison."""
@@ -79,9 +81,15 @@ def run(
     output_dir: Path,
     config: PINNConfig,
     fit_physical: bool = True,
+    use_synthetic: bool = False,
 ) -> Dict[str, float]:
     """Run one requested model or both models on exactly the same arrays."""
-    times, input_values, observed_bold = load_csv(data_path) if data_path else synthetic_data()
+    if data_path is not None:
+        times, input_values, observed_bold = load_csv(data_path)
+    elif use_synthetic:
+        times, input_values, observed_bold = synthetic_data()
+    else:
+        raise ValueError("Provide a CSV data path or set use_synthetic=True")
     params = BalloonParams()
     metrics: Dict[str, float] = {}
 
@@ -159,12 +167,24 @@ def run(
 def main(argv: Optional[Sequence[str]] = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("physical", "pinn", "costa", "compare"), default="compare")
-    parser.add_argument("--data", type=Path, help="CSV with time,input,bold; defaults to synthetic data")
-    parser.add_argument("--subject", help="BIDS subject ID, for example sub-10159")
+    parser.add_argument("--data", type=Path, help="CSV with time,input,bold")
+    parser.add_argument(
+        "--subject",
+        help=f"BIDS subject ID; defaults to {DEFAULT_SUBJECT} when no other input is provided",
+    )
     parser.add_argument("--data-root", type=Path, default=Path("data/ds000030"))
     parser.add_argument("--bold-path", type=Path, help="Preprocessed BOLD NIfTI; overrides the raw subject path")
     parser.add_argument("--events-path", type=Path, help="Events TSV; defaults to the subject's raw BIDS events file")
-    parser.add_argument("--roi-mask", type=Path, help="Aligned ROI mask NIfTI for --subject")
+    parser.add_argument(
+        "--roi-mask",
+        type=Path,
+        help="Aligned ROI mask NIfTI; if omitted, extract the EPI-masked whole-brain mean",
+    )
+    parser.add_argument(
+        "--synthetic",
+        action="store_true",
+        help="Use deterministic synthetic input instead of real subject or CSV data",
+    )
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -173,20 +193,29 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     parser.add_argument("--epochs", type=int, default=2000)
     parser.add_argument("--no-fit-physical", action="store_true", help="Use default Balloon parameters")
     args = parser.parse_args(argv)
-    if args.data is not None and args.subject is not None:
+    has_subject_input = any(
+        value is not None
+        for value in (args.subject, args.bold_path, args.events_path, args.roi_mask)
+    )
+    if args.data is not None and has_subject_input:
         parser.error("use either --data or --subject, not both")
-    if args.bold_path is not None and args.subject is None:
+    if args.synthetic and (args.data is not None or has_subject_input):
+        parser.error("--synthetic cannot be combined with --data or subject input options")
+    subject = args.subject
+    if args.data is None and not args.synthetic and subject is None:
+        subject = DEFAULT_SUBJECT
+    if args.bold_path is not None and subject is None:
         parser.error("--bold-path requires --subject")
     output_dir = args.output_dir or default_output_dir(args.mode, args.epochs)
     data_path = args.data
-    if args.subject is not None:
-        if args.roi_mask is None:
-            parser.error("--roi-mask is required with --subject")
-        subject_dir = args.data_root / args.subject / "func"
-        bold_path = args.bold_path or subject_dir / f"{args.subject}_task-stopsignal_bold.nii.gz"
-        events_path = args.events_path or subject_dir / f"{args.subject}_task-stopsignal_events.tsv"
-        times, input_values, observed_bold = load_subject_timeseries(bold_path, events_path, args.roi_mask)
-        data_path = output_dir / f"{args.subject}_timeseries.csv"
+    if subject is not None:
+        subject_dir = args.data_root / subject / "func"
+        bold_path = args.bold_path or subject_dir / f"{subject}_task-stopsignal_bold.nii.gz"
+        events_path = args.events_path or subject_dir / f"{subject}_task-stopsignal_events.tsv"
+        times, input_values, observed_bold = load_subject_timeseries(
+            bold_path, events_path, args.roi_mask
+        )
+        data_path = output_dir / f"{subject}_timeseries.csv"
         write_timeseries_csv(data_path, times, input_values, observed_bold)
     metrics = run(
         args.mode,
@@ -194,6 +223,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         output_dir,
         PINNConfig(epochs=args.epochs),
         fit_physical=not args.no_fit_physical,
+        use_synthetic=args.synthetic,
     )
     print(json.dumps(metrics, indent=2))
     print("Ran successfully")

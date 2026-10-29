@@ -43,16 +43,15 @@ def normalize_bold(bold: np.ndarray, baseline_volumes: int = 10) -> np.ndarray:
 def load_subject_timeseries(
     bold_path: Path,
     events_path: Path,
-    roi_mask_path: Path,
+    roi_mask_path: Optional[Path] = None,
     standardize: bool = False,
     baseline_volumes: int = 10,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Extract a baseline-normalized ROI trace and GO input from one subject.
 
-    ``roi_mask_path`` must already be aligned to the BOLD image or to the same
-    standard-space image supplied as ``bold_path``. It is deliberately explicit
-    because resampling a standard atlas directly onto raw scanner-space BOLD
-    is not a valid registration step.
+    ``roi_mask_path`` must already be aligned to the BOLD image. If no ROI mask
+    is provided, an EPI-derived brain mask is computed and the whole-brain mean
+    trace is extracted. This avoids applying an atlas mask in the wrong space.
     """
     bold_image = nib.load(bold_path)
     if len(bold_image.shape) != 4:
@@ -60,7 +59,8 @@ def load_subject_timeseries(
     repetition_time = float(bold_image.header.get_zooms()[3])
     times = np.arange(bold_image.shape[3], dtype=float) * repetition_time
     events = pd.read_csv(events_path, sep="\t")
-    masker = NiftiMasker(mask_img=str(roi_mask_path), standardize=standardize, detrend=not standardize)
+    mask_img = str(roi_mask_path) if roi_mask_path is not None else None
+    masker = NiftiMasker(mask_img=mask_img, standardize=standardize, detrend=not standardize)
     extracted = masker.fit_transform(str(bold_path))
     if extracted.shape[1] == 0:
         raise ValueError(f"ROI mask contains no voxels in the BOLD image: {roi_mask_path}")

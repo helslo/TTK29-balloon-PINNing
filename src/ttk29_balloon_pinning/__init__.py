@@ -19,21 +19,49 @@ def _build_parser() -> argparse.ArgumentParser:
 
     for command_name in ("physical", "pinn", "costa", "compare"):
         subparser = subparsers.add_parser(command_name, help=f"Run the {command_name} model pipeline")
-        subparser.add_argument("--data", type=Path, help="CSV with time,input,bold; defaults to synthetic data")
-        subparser.add_argument("--subject", help="BIDS subject ID, for example sub-10159")
+        subparser.add_argument("--data", type=Path, help="CSV with time,input,bold")
+        subparser.add_argument(
+            "--subject",
+            help="BIDS subject ID; defaults to sub-10159 when no other input is provided",
+        )
         subparser.add_argument("--data-root", type=Path, default=Path("data/ds000030"))
         subparser.add_argument("--bold-path", type=Path, help="Preprocessed BOLD NIfTI; overrides the raw subject path")
         subparser.add_argument("--events-path", type=Path, help="Events TSV; defaults to the subject's raw BIDS events file")
-        subparser.add_argument("--roi-mask", type=Path, help="Aligned ROI mask NIfTI for --subject")
+        subparser.add_argument(
+            "--roi-mask",
+            type=Path,
+            help="Aligned ROI mask NIfTI; if omitted, extract the EPI-masked whole-brain mean",
+        )
+        subparser.add_argument(
+            "--synthetic",
+            action="store_true",
+            help="Use deterministic synthetic input instead of real subject or CSV data",
+        )
         subparser.add_argument("--output-dir", type=Path, help="Directory for results; defaults to a timestamped folder under results/")
         subparser.add_argument("--epochs", type=int, default=2000)
         subparser.add_argument("--no-fit-physical", action="store_true", help="Use default Balloon parameters")
 
     sensor_parser = subparsers.add_parser("sensor", help="Run the sparse sensor-placement analysis")
-    sensor_parser.add_argument("--data", type=Path, help="Path to ROI-averaged HDF5 data; defaults to the newest ROI file if present")
-    sensor_parser.add_argument("--k-max", type=int, default=10, help="Maximum number of sensors to evaluate in the k sweep")
-    sensor_parser.add_argument("--n-random-draws", type=int, default=10, help="Number of random-placement draws for each k")
-    sensor_parser.add_argument("--holdout", choices=("both", "temporal", "participant"), default="both")
+    sensor_parser.add_argument("--data-root", type=Path, default=Path("data/ds000030"))
+    sensor_parser.add_argument("--task", default="rest")
+    sensor_parser.add_argument("--max-participants", type=int, default=20)
+    sensor_parser.add_argument("--include-all-diagnoses", action="store_true")
+    sensor_parser.add_argument("--max-mean-fd", type=float, default=0.5)
+    sensor_parser.add_argument("--voxel-size-mm", type=float, default=4.0)
+    sensor_parser.add_argument("--smoothing-fwhm-mm", type=float, default=6.0)
+    sensor_parser.add_argument("--global-signal", action="store_true")
+    sensor_parser.add_argument("--cache-dir", type=Path, default=Path("data/cleaned"))
+    sensor_parser.add_argument("--k-values")
+    sensor_parser.add_argument("--k-fraction", type=float, default=0.05)
+    sensor_parser.add_argument("--k-points", type=int, default=8)
+    sensor_parser.add_argument("--rank", type=int)
+    sensor_parser.add_argument("--n-random-draws", type=int, default=10)
+    sensor_parser.add_argument("--n-folds", type=int, default=5)
+    sensor_parser.add_argument("--include-l1", action="store_true")
+    sensor_parser.add_argument("--l1-k-values")
+    sensor_parser.add_argument("--l1-alpha", type=float)
+    sensor_parser.add_argument("--l1-iterations", type=int, default=40)
+    sensor_parser.add_argument("--l1-test-timepoints", type=int, default=40)
     sensor_parser.add_argument("--output-dir", type=Path, default=Path("results/sensor_placement"))
     sensor_parser.add_argument("--seed", type=int, default=0)
 
@@ -75,6 +103,8 @@ def main(argv: list[str] | None = None) -> None:
             command_argv.extend(["--epochs", str(args.epochs)])
         if getattr(args, "no_fit_physical", False):
             command_argv.append("--no-fit-physical")
+        if args.synthetic:
+            command_argv.append("--synthetic")
         comparison_main(command_argv)
         return
 
@@ -82,16 +112,38 @@ def main(argv: list[str] | None = None) -> None:
         from sensor_placement.run import main as sensor_main
 
         sensor_argv = []
-        if getattr(args, "data", None) is not None:
-            sensor_argv.extend(["--data", str(args.data)])
-        if args.k_max is not None:
-            sensor_argv.extend(["--k-max", str(args.k_max)])
-        if args.n_random_draws is not None:
-            sensor_argv.extend(["--n-random-draws", str(args.n_random_draws)])
-        if args.holdout is not None:
-            sensor_argv.extend(["--holdout", args.holdout])
-        sensor_argv.extend(["--output-dir", str(args.output_dir)])
-        sensor_argv.extend(["--seed", str(args.seed)])
+        for option, value in (
+            ("--data-root", args.data_root),
+            ("--task", args.task),
+            ("--max-participants", args.max_participants),
+            ("--max-mean-fd", args.max_mean_fd),
+            ("--voxel-size-mm", args.voxel_size_mm),
+            ("--smoothing-fwhm-mm", args.smoothing_fwhm_mm),
+            ("--cache-dir", args.cache_dir),
+            ("--k-fraction", args.k_fraction),
+            ("--k-points", args.k_points),
+            ("--n-random-draws", args.n_random_draws),
+            ("--n-folds", args.n_folds),
+            ("--l1-iterations", args.l1_iterations),
+            ("--l1-test-timepoints", args.l1_test_timepoints),
+            ("--output-dir", args.output_dir),
+            ("--seed", args.seed),
+        ):
+            sensor_argv.extend([option, str(value)])
+        for option, value in (
+            ("--k-values", args.k_values),
+            ("--rank", args.rank),
+            ("--l1-k-values", args.l1_k_values),
+            ("--l1-alpha", args.l1_alpha),
+        ):
+            if value is not None:
+                sensor_argv.extend([option, str(value)])
+        if args.include_all_diagnoses:
+            sensor_argv.append("--include-all-diagnoses")
+        if args.global_signal:
+            sensor_argv.append("--global-signal")
+        if args.include_l1:
+            sensor_argv.append("--include-l1")
         sensor_main(sensor_argv)
         return
 

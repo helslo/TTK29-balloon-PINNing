@@ -4,7 +4,9 @@
 
 ## 1. Goal
 
-Compare a **pure physical model** of the BOLD hemodynamic response against **three hybrid physics+ML approaches** (PINN, CoSTA, SINDy), all fit to real task-fMRI data from a single brain region.
+The implemented comparison workflow evaluates the Balloon-Windkessel model,
+PINN, and CoSTA on BOLD time series derived from real task-fMRI data. A
+separate sensor-placement workflow evaluates voxel-level reconstruction.
 
 This is a course project (TTK29, 3.75 study points) designed to build modeling skills that feed directly into a related masters project on BOLD-signal analysis in mental health disorders.
 
@@ -31,14 +33,20 @@ uv run python -m ttk29_balloon_pinning costa --epochs 2000
 # full comparison of all methods on the same dataset
 uv run python -m ttk29_balloon_pinning compare --epochs 2000
 
-# sparse sensor placement / compressed sensing analysis
-uv run python -m ttk29_balloon_pinning sensor --k-max 10
+# use generated input for a quick synthetic test instead
+uv run python -m ttk29_balloon_pinning compare --synthetic
+
+# voxel sensor placement / compressed sensing analysis
+uv run python -m ttk29_balloon_pinning sensor --task rest
 
 # summarize and plot the newest saved run automatically
 uv run python -m ttk29_balloon_pinning latest --plot
 ```
 
-If no explicit run path is given to the summary tools, they automatically resolve the newest directory beneath `results/` and plot that run by default. This keeps the workflow lightweight and avoids manually finding the last comparison folder after a training run.
+`latest --plot` resolves the newest complete comparison directory beneath
+`results/` when one is available, so it plots every model saved for that run.
+If there is no comparison run, it falls back to the newest individual model
+archive. To plot a specific run, pass its directory to the summary tools.
 
 The model comparison implementation and its Balloon, PINN, CoSTA, and BIDS
 timeseries modules are organized in the `model_comparison` package. For a
@@ -46,6 +54,11 @@ simple, readable run, edit the constants at the top of
 `run_comparison_analysis.py` (mode, epochs, input data, and output directory)
 and execute that file. The package can also be run with
 `python -m model_comparison`.
+
+Comparison commands use the real `sub-10159` BIDS scan under `data/ds000030`
+when no CSV or subject is specified. Without an aligned `--roi-mask`, they
+compute an EPI-derived brain mask and extract the whole-brain mean BOLD trace.
+Use `--synthetic` explicitly for generated test data.
 
 ## 3. Theory primer: the math behind the models
 
@@ -90,16 +103,22 @@ where `r_θ(t)` is a learned residual correction. This makes the method more int
 
 ### 3.4 Sparse sensor placement and compressed sensing
 
-For ROI-based fMRI analysis, suppose each ROI is a row of a matrix `X ∈ R^{n_rois × n_time}` after z-scoring over time. The goal is to observe only `k << n_rois` rows (sensors) and reconstruct the full matrix from those observations. We therefore solve a reduced problem of the form
+For voxel-based fMRI analysis, suppose each voxel inside a common-space brain
+mask is a row of a matrix `X ∈ R^{n_voxels × n_time}` after cleaning and
+z-scoring. The goal is to observe only `k << n_voxels` rows (sensors) and
+reconstruct the full matrix from those observations. We therefore solve a
+reduced problem of the form
 
 ```text
 y = M X,
 X_hat = A y,
 ```
 
-where `M` selects the measured rows and `A` maps measurements back to the full ROI space. In the simplest formulation, the low-rank basis from the SVD provides the dominant spatial modes, and QR pivoting chooses the rows that best span that subspace. LASSO-based compressed sensing adds a sparse regularizer in a cosine-transform basis to recover coefficients from a limited number of measurements.
+where `M` selects the measured rows and `A` maps measurements back to the full voxel space. In the simplest formulation, the low-rank basis from the SVD provides the dominant spatial modes, and QR pivoting chooses the rows that best span that subspace. LASSO-based compressed sensing adds a sparse regularizer in a cosine-transform basis to recover coefficients from a limited number of measurements.
 
-This is the core of the sensor-placement workflow: choose a small set of informative ROIs, reconstruct the rest, and evaluate how quickly the error rises as `k` becomes smaller.
+This is the core of the sensor-placement workflow: choose a small set of
+informative voxels, reconstruct the rest, and evaluate how quickly the error
+rises as `k` becomes smaller.
 
 ## 4. Core physical model: the Balloon(-Windkessel) model
 
@@ -143,12 +162,11 @@ Chosen over the other LA5c tasks (task-switching, spatial working memory, BART, 
 
 Kept to healthy controls for the primary model comparison, so that inter-subject vascular/neural coupling variability doesn't get entangled with the question this project is actually asking (how well do different modeling approaches fit hemodynamic dynamics?). Comparing model fits across diagnostic groups is a different, follow-on question — see Section 7 for how this could extend toward the masters project.
 
-## 5. Region of interest: Left primary motor cortex (M1, hand area)
+## 5. BOLD signal input
 
-Chosen because:
-- The Go-trial response is a button press, so M1 (contralateral to the responding hand) has a strong, well-localized, high-SNR BOLD response tightly time-locked to the task events — ideal for a first pass at fitting and comparing models.
-- It's the same region used in the original Buxton/Friston balloon-model papers, so there's a direct literature baseline for expected parameter ranges.
-- **Note:** most LA5c subjects are right-handed (respond with the right hand), which is why left M1 is the default — but confirm per-subject response hand from the task event files, since a few subjects may differ.
+The comparison workflow uses an EPI-derived brain mask and extracts the
+whole-brain mean BOLD trace by default. Supply an aligned ROI mask with
+`--roi-mask` to analyze a specific region instead.
 
 ## 6. Repo / deliverables
 
@@ -181,11 +199,11 @@ uv run python -m model_comparison --mode costa --epochs 2000
 uv run python -m model_comparison --mode compare --epochs 2000
 ```
 
-With no `--data` argument, these commands use a deterministic synthetic
-Balloon-model trace. A real experiment can be supplied as a CSV containing
-three columns: `time`, `input`, and `bold`. The same CSV is passed to both
-models in `compare` mode, so the comparison does not change the input grid or
-observations between methods.
+With no `--data`, `--subject`, or `--bold-path` argument, these commands use
+the real `sub-10159` BIDS scan under `data/ds000030`. An experiment can also be
+supplied as a CSV containing `time`, `input`, and `bold` columns. The same
+input is passed to each model in `compare` mode. Use `--synthetic` explicitly
+for a deterministic generated trace.
 
 Outputs are written to a timestamped folder under `results/` by default. For
 example, a physical-model run at 25 September 2026 at 18:02:43 is saved in
@@ -347,114 +365,58 @@ fixed-parameter forward simulation.
 
 ### Goal
 Estimate how well whole-brain BOLD activity can be reconstructed from only a
-subset of "sensors", and find which sensor locations are the most informative.
-The fully sampled, fMRIPrep-preprocessed ROI-averaged data is treated as ground
-truth. We pretend only k ROIs were measured, reconstruct the rest, and measure
-the error. This is a proxy for sparse modalities (fNIRS, EEG, ECoG), not a
-model of the MRI scanner itself.
+subset of "sensors" (measurement locations), and find which locations are the
+most informative. The fully sampled, fMRIPrep-preprocessed data is treated as
+ground truth. We pretend only k locations were measured, reconstruct the
+rest, and measure the error. This is a proxy for sparse modalities (fNIRS,
+EEG, ECoG), not a model of the MRI scanner itself.
 
-### Input data
-- File: `results/ROI_averaged_data.h5` (output of the ROI averaging step).
-- Assumed layout: one BOLD time series per ROI per participant, originally
-  stored as `{participant_ID: {ROI: signal}}`. Verify and adapt the loader.
-- Build, per participant, a matrix `X` of shape `(n_rois, n_timepoints)`.
-- Each ROI time series should be z-scored (zero mean, unit variance) before
-  analysis. Document any further preprocessing in the code.
+### Data and defaults
 
-### Definitions
-- **Sensor**: one ROI (a row of `X`) that we choose to observe.
-- **k**: number of sensors selected.
-- **Reconstruction**: estimate all `n_rois` signals from the `k` observed ones.
-- **Error metric**: normalized RMSE, `||X - X_hat||_F / ||X||_F`, computed on
-  held-out data only. Optionally also report mean per-ROI Pearson correlation.
+The sensor workflow uses MNI-space fMRIPrep derivatives for the requested
+BIDS task. It does not substitute synthetic data or treat raw scans as
+preprocessed derivatives. By default it selects up to 20 healthy-control
+participants for `rest`, excluding runs whose mean framewise displacement is
+above 0.5 mm. The derivatives must include preprocessed BOLD images, brain
+masks, confounds, and BIDS JSON metadata; raw scans alone are insufficient.
 
-### Methods to implement
-Implement each method as a separate function in `sensor_placement/methods.py`
-with a common interface: given training data and `k`, return the selected
-sensor indices and a reconstruction function.
+Preprocessing uses the TR from the BIDS metadata, regresses motion and tissue
+confounds, detrends and high-pass filters at 0.01 Hz, z-scores voxel signals,
+smooths at 6 mm FWHM, and resamples to a shared 4 mm MNI grid. The intersection
+of run masks provides a consistent voxel index across participants. Cleaned
+data are cached under `data/cleaned/`.
 
-1. **Random placement (baseline).** Choose `k` ROIs uniformly at random.
-   Repeat for many random draws (e.g. 50) and report mean and std of the
-   error. Reconstruct with least squares in the low-rank basis from method 2.
-2. **Optimal placement via SVD + QR pivoting (SSPOR style).**
-   - Compute the SVD of the training data: `X_train = U S V^T`.
-   - Keep the leading `r` spatial modes `U_r` (shape `n_rois x r`). Choose `r`
-     from the singular value spectrum, and also try `r = k`.
-   - Run QR factorization with column pivoting on `U_r^T`
-     (`scipy.linalg.qr(..., pivoting=True)`). The first `k` pivots are the
-     selected sensor indices.
-   - Reconstruct by estimating mode coefficients from the observed rows
-     (`a = pinv(U_r[sensors, :]) @ y`) and computing `x_hat = U_r @ a`.
-     Consider a small ridge penalty if the system is ill-conditioned.
-3. **Compressed sensing recovery with L1.**
-   - Assume the signal is sparse in a DCT basis along the spatial axis
-     (ROI index) or, alternatively, in a learned dictionary.
-   - Measurement: select the `k` rows given by (a) random placement and
-     (b) the QR-pivoting placement from method 2.
-   - Recover coefficients with LASSO (`sklearn.linear_model.Lasso` or
-     `LassoCV`), then map back to the full signal.
-   - This lets us separate the effect of the placement strategy from the
-     effect of the reconstruction method.
+### Methods and evaluation
 
-### Evaluation protocol
-- Sweep `k` from 1 up to a sensible maximum (e.g. every value up to
-  `n_rois // 2`, then coarser steps).
-- Two held-out schemes, reported separately:
-  - **Temporal hold-out**: fit the basis and placement on the first ~70% of
-    time points per participant, test on the remaining ~30%.
-  - **Participant hold-out**: fit the basis and placement on a training set of
-    participants, test on unseen participants (use k-fold cross-validation over
-    participants). This is the more honest test of whether one placement
-    generalizes across brains.
-- Never choose sensors or fit the basis using test data.
-- Fix random seeds and save all results (per method, `k`, fold) to
-  `results/sensor_placement/` as CSV or HDF5 so plots can be regenerated
-  without recomputing.
+- **Random placement:** selects voxels uniformly and reconstructs using a
+  training-fitted low-rank basis.
+- **QR placement:** uses truncated SVD modes and pivoted QR to select
+  informative voxels, then reconstructs with regularized least squares.
+- **Optional L1 recovery:** `--include-l1` adds random and QR placements with
+  spatial 3D-DCT/FISTA reconstruction. It uses a reduced low/medium/high
+  sensor-count grid by default and selects its regularization parameter using
+  training-only validation data.
 
-### Visualizations
-Save all figures to `results/sensor_placement/figures/` as PNG (and PDF for the
-report). Use matplotlib; use nilearn plotting for brain figures. Label axes
-with units, and add titles and legends.
+The default sensor-count grid is log-spaced up to 5% of the mask voxels.
+Evaluation reports normalized RMSE and mean voxel-wise correlation for
+temporal hold-outs and participant hold-outs. Basis fitting and sensor
+selection use training data only. Random placement uses 10 draws by default.
 
-1. **Error vs number of sensors.** Line plot, x = `k`, y = normalized RMSE.
-   One line per method (random, QR-pivoting + least squares, random + LASSO,
-   QR-pivoting + LASSO). Random baselines shown as mean with a shaded
-   std band. Make one panel for temporal hold-out and one for participant
-   hold-out.
-2. **Singular value spectrum.** Cumulative explained variance vs number of
-   modes, with a marker at the chosen `r`. Shows how low-rank the data is.
-3. **Selected sensors on the brain.** Using the atlas, plot the first `k`
-   ROIs chosen by QR pivoting (e.g. `k = 5, 10, 20`) on glass-brain or
-   slice views, highlighting the selected ROIs. Use
-   `nilearn.plotting.plot_roi` or `plot_glass_brain`.
-4. **Reconstruction examples.** For one test participant, show true vs
-   reconstructed time series for 3 to 4 ROIs (including one selected
-   sensor and several unobserved ROIs) at a small and a large `k`.
-5. **Per-ROI error map.** Brain map where each ROI is colored by its
-   reconstruction error at a chosen `k`, to show which regions are hard
-   to reconstruct.
-6. **Sensor stability.** Heatmap or bar chart of how often each ROI is
-   selected across cross-validation folds (selection frequency per ROI),
-   showing whether the optimal placement is consistent across participants.
-7. **(Optional) Group comparison.** If diagnosis labels are available for
-   LA5c, compare reconstruction error and selected sensors between diagnosis
-   groups (box plot of error at fixed `k`).
+### Running the sensor analysis
 
-### Suggested file structure
-```
-sensor_placement/
-    data.py        # load HDF5, build X, z-score, train/test splits
-    methods.py     # random, qr_pivot, cs_lasso placement + reconstruction
-    evaluate.py    # k-sweep, hold-out schemes, save results
-    plots.py       # all figures listed above, reading saved results
-    run.py         # CLI entry point, config (k range, r, seeds, paths)
+```bash
+uv run python -m ttk29_balloon_pinning sensor --task rest
 ```
 
-### Implementation notes
-- Add a docstring to every function explaining the math, not just the
-  arguments.
-- Keep each method readable and commented, since the goal is to understand
-  every step.
-- Runs on a single machine should be fine at ROI level; use Slurm only if
-  extended to voxel level.
-- Out of scope for now: voxel-level analysis and k-space undersampling.
+Use `--data-root` to point to a BIDS dataset containing
+`derivatives/fmriprep`. Useful options include `--max-participants`,
+`--include-all-diagnoses`, `--max-mean-fd`, `--voxel-size-mm`,
+`--smoothing-fwhm-mm`, `--k-values`, and `--rank`. Enable L1 with
+`--include-l1`; its runtime can be limited with `--l1-k-values`,
+`--l1-test-timepoints`, and `--l1-iterations`. The CLI help lists all options.
+
+Results are written to `results/sensor_placement/`: metrics in
+`sensor_placement_results.csv`, run settings and exclusions in
+`sensor_placement_metadata.json`, and figures in `figures/`. Results from the
+previous ROI-based workflow are legacy outputs and are not comparable to this
+voxel-based pipeline.

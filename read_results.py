@@ -16,9 +16,22 @@ def load_json_value(value: np.ndarray) -> Dict[str, float]:
 
 
 def latest_result_path(base_dir: Path = Path("results")) -> Path | None:
-    """Return the newest model archive or run directory under ``base_dir``."""
+    """Return the newest complete comparison directory, or newest model archive."""
     if not base_dir.exists():
         return None
+
+    comparison_dirs = [
+        child
+        for child in base_dir.iterdir()
+        if child.is_dir()
+        and (child / "comparison_metrics.json").is_file()
+        and any(child.glob("*_model.npz"))
+    ]
+    if comparison_dirs:
+        return max(
+            comparison_dirs,
+            key=lambda path: (path / "comparison_metrics.json").stat().st_mtime,
+        )
 
     candidates: list[Path] = []
     for child in sorted(base_dir.iterdir(), key=lambda path: path.name):

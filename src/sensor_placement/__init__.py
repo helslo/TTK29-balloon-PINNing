@@ -1,25 +1,27 @@
-"""Sparse sensor placement and compressed sensing utilities for ROI time series."""
+"""Sparse sensor placement and compressed sensing utilities for voxel time series."""
 
 from .data import (
-    build_roi_matrices,
-    load_roi_data,
+    RunFiles,
+    SensorRun,
+    discover_runs,
+    load_clean_runs,
     temporal_holdout_split,
     participant_holdout_split,
-    synthetic_roi_data,
 )
 from .methods import (
-    lasso_placement,
+    l1_dct_placement,
     qr_pivot_placement,
     random_placement,
 )
 
 __all__ = [
-    "build_roi_matrices",
-    "load_roi_data",
+    "RunFiles",
+    "SensorRun",
+    "discover_runs",
+    "load_clean_runs",
     "temporal_holdout_split",
     "participant_holdout_split",
-    "synthetic_roi_data",
     "random_placement",
     "qr_pivot_placement",
-    "lasso_placement",
+    "l1_dct_placement",
 ]
