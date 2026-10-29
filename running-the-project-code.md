@@ -16,6 +16,14 @@ uses the whole-brain mean BOLD trace. Set `MODE` to `"physical"`, `"pinn"`, or
 `OUTPUT_DIR` are optional settings. For synthetic test data, use
 `uv run python -m ttk29_balloon_pinning compare --synthetic`.
 
+The real-data loader does not detrend or standardize the ROI signal before
+normalization. It converts raw intensity to fractional change using the
+whole-run median, because the task events begin at the start of this scan and
+the initial volumes are not a resting baseline. Event durations are averaged
+over each TR interval, preserving events that fall between volume timestamps.
+This keeps the target on a scale compatible with the Balloon model and avoids
+dropping 1.5-second events in a 2-second-TR scan.
+
 The project CLI remains available when you prefer command-line options:
 
 ## Quick start

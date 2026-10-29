@@ -58,7 +58,11 @@ and execute that file. The package can also be run with
 Comparison commands use the real `sub-10159` BIDS scan under `data/ds000030`
 when no CSV or subject is specified. Without an aligned `--roi-mask`, they
 compute an EPI-derived brain mask and extract the whole-brain mean BOLD trace.
-Use `--synthetic` explicitly for generated test data.
+The loader preserves raw intensity until it computes fractional change from
+the whole-run median; it does not detrend or standardize the signal first.
+Event boxcars are averaged over each TR interval so events between volume
+timestamps are retained. Use `--synthetic` explicitly for generated test
+data.
 
 ## 3. Theory primer: the math behind the models
 
