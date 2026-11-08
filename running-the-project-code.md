@@ -10,19 +10,18 @@ uv run python run_comparison_analysis.py
 
 The script defaults to a full comparison with 2000 epochs using the real
 `sub-10159` scan under `data/ds000030` and saves outputs in a timestamped folder
-under `results/`. With no `ROI_MASK`, it computes an EPI-derived brain mask and
-uses the whole-brain mean BOLD trace. Set `MODE` to `"physical"`, `"pinn"`, or
+under `results/`. With no `ROI_MASK`, it computes an explicit EPI-derived brain
+mask and uses the brain-mean BOLD trace. Set `MODE` to `"physical"`, `"pinn"`, or
 `"costa"` to run just one model. `DATA_FILE`, `SUBJECT`, `ROI_MASK`, and
 `OUTPUT_DIR` are optional settings. For synthetic test data, use
 `uv run python -m ttk29_balloon_pinning compare --synthetic`.
 
-The real-data loader does not detrend or standardize the ROI signal before
-normalization. It converts raw intensity to fractional change using the
-whole-run median, because the task events begin at the start of this scan and
-the initial volumes are not a resting baseline. Event durations are averaged
-over each TR interval, preserving events that fall between volume timestamps.
-This keeps the target on a scale compatible with the Balloon model and avoids
-dropping 1.5-second events in a 2-second-TR scan.
+The real-data loader preserves raw intensity until it converts the ROI signal
+to fractional change using the whole-run median, interpolates isolated
+one-volume spikes, then removes linear drift. Event durations for labeled GO
+and STOP trials are averaged over each TR interval regardless of trial
+outcome, preserving events between volume timestamps and avoiding a
+successful-GO-only input.
 
 The project CLI remains available when you prefer command-line options:
 

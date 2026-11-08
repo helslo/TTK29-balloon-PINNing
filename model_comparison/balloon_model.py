@@ -36,12 +36,14 @@ class BalloonParams:
 
 @dataclass
 class BalloonFit:
-    """Result of fitting Balloon parameters to one BOLD time series."""
+    """Result of fitting Balloon parameters and observation drift to one trace."""
 
     params: BalloonParams
     fitted_bold: np.ndarray
     optimizer_cost: float
     nfev: int
+    observation_baseline: float = 0.0
+    observation_linear_drift: float = 0.0
 
 
 def build_input_function(
@@ -205,7 +207,8 @@ def fit_balloon(
 
     The fitted parameters are ``kappa``, ``gamma``, ``tau``, ``alpha``,
     ``eps``, and ``V0``. Scanner-specific observation parameters remain fixed
-    because they are determined by the acquisition protocol.
+    because they are determined by the acquisition protocol. A constant
+    baseline and linear scan drift are profiled as nuisance observation terms.
     """
     times = np.asarray(times, dtype=float)
     observed_bold = np.asarray(observed_bold, dtype=float)
@@ -223,8 +226,10 @@ def fit_balloon(
     initial = np.array([getattr(base, name) for name in names], dtype=float)
     lower = np.array([0.01, 0.01, 0.05, 0.1, 0.01, 0.001])
     upper = np.array([5.0, 5.0, 5.0, 1.0, 5.0, 0.2])
+    normalized_time = (times - np.mean(times)) / max(float(times[-1] - times[0]), 1.0)
+    observation_basis = np.column_stack((np.ones_like(times), normalized_time))
 
-    def predict(values: np.ndarray) -> np.ndarray:
+    def simulate_prediction(values: np.ndarray) -> np.ndarray:
         fitted_params = BalloonParams(
             kappa=values[0], gamma=values[1], tau=values[2], alpha=values[3],
             eps=values[4], V0=values[5], E0=base.E0, nu0=base.nu0,
@@ -239,6 +244,13 @@ def fit_balloon(
             return np.full_like(observed_bold, 1e3)
         return np.interp(times, simulated_times, predicted)
 
+    def predict(values: np.ndarray) -> np.ndarray:
+        prediction = simulate_prediction(values)
+        nuisance = np.linalg.lstsq(
+            observation_basis, observed_bold - prediction, rcond=None
+        )[0]
+        return prediction + observation_basis @ nuisance
+
     result = least_squares(
         lambda values: predict(values) - observed_bold,
         initial,
@@ -251,8 +263,19 @@ def fit_balloon(
         eps=result.x[4], V0=result.x[5], E0=base.E0, nu0=base.nu0,
         r0=base.r0, epsilon_r=base.epsilon_r, TE=base.TE,
     )
-    fitted_bold = predict(result.x)
-    return BalloonFit(fitted_params, fitted_bold, float(result.cost), result.nfev)
+    physical_bold = simulate_prediction(result.x)
+    nuisance = np.linalg.lstsq(
+        observation_basis, observed_bold - physical_bold, rcond=None
+    )[0]
+    fitted_bold = physical_bold + observation_basis @ nuisance
+    return BalloonFit(
+        fitted_params,
+        fitted_bold,
+        float(result.cost),
+        result.nfev,
+        float(nuisance[0]),
+        float(nuisance[1]),
+    )
 
 
 if __name__ == "__main__":

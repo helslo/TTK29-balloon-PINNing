@@ -33,6 +33,9 @@ class BalloonPINN(nn.Module):
         super().__init__()
         if duration <= 0:
             raise ValueError("duration must be positive")
+        self.observation_v0 = nn.Parameter(
+            torch.tensor(float(np.clip(params.V0, 0.001, 0.2)), dtype=torch.float32)
+        )
         layers = [nn.Linear(1, hidden_width), nn.Tanh()]
         for _ in range(hidden_layers - 1):
             layers.extend([nn.Linear(hidden_width, hidden_width), nn.Tanh()])
@@ -40,6 +43,11 @@ class BalloonPINN(nn.Module):
         self.network = nn.Sequential(*layers)
         self.params = params
         self.duration = duration
+
+    @property
+    def v0(self) -> torch.Tensor:
+        """Return the learned BOLD observation scale within the fit bounds."""
+        return torch.clamp(self.observation_v0, min=0.001, max=0.2)
 
     def forward(self, time: torch.Tensor) -> torch.Tensor:
         """Return states ``[s, f, v, q]`` with the physical initial state enforced."""
@@ -80,7 +88,9 @@ class BalloonPINN(nn.Module):
         k1 = 4.3 * params.nu0 * params.E0 * params.TE
         k2 = params.epsilon_r * params.r0 * params.E0 * params.TE
         k3 = 1.0 - params.epsilon_r
-        bold = params.V0 * (k1 * (1.0 - deoxy) + k2 * (1.0 - deoxy / volume) + k3 * (1.0 - volume))
+        bold = self.v0 * (
+            k1 * (1.0 - deoxy) + k2 * (1.0 - deoxy / volume) + k3 * (1.0 - volume)
+        )
         return residual, bold
 
 
@@ -131,7 +141,7 @@ def train_pinn(
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, factor=0.5, patience=max(100, config.epochs // 20), min_lr=1e-5
     )
-    history: Dict[str, list] = {"total": [], "data": [], "physics": []}
+    history: Dict[str, list] = {"total": [], "data": [], "physics": [], "V0": []}
     bold_scale = max(float(np.std(observed_bold)), 1e-6)
 
     def calculate_losses() -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -158,10 +168,13 @@ def train_pinn(
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
+        with torch.no_grad():
+            model.observation_v0.clamp_(0.001, 0.2)
         scheduler.step(loss.detach())
         history["total"].append(float(loss.detach()))
         history["data"].append(float(data_loss.detach()))
         history["physics"].append(float(physics_loss.detach()))
+        history["V0"].append(float(model.v0.detach()))
 
     if config.lbfgs_steps:
         lbfgs = torch.optim.LBFGS(
@@ -178,10 +191,13 @@ def train_pinn(
             return loss
 
         lbfgs.step(closure)
+        with torch.no_grad():
+            model.observation_v0.clamp_(0.001, 0.2)
         loss, data_loss, physics_loss = total_loss()
         history["total"].append(float(loss.detach()))
         history["data"].append(float(data_loss.detach()))
         history["physics"].append(float(physics_loss.detach()))
+        history["V0"].append(float(model.v0.detach()))
     return model, history
 
 
@@ -196,10 +212,9 @@ def predict_pinn(model: BalloonPINN, times: np.ndarray, input_values: np.ndarray
     with torch.no_grad():
         states = model(time_tensor).numpy()
     params = model.params
-    bold = params.V0 * (
+    bold = float(model.v0.detach()) * (
         4.3 * params.nu0 * params.E0 * params.TE * (1.0 - states[:, 3])
         + params.epsilon_r * params.r0 * params.E0 * params.TE * (1.0 - states[:, 3] / states[:, 2])
         + (1.0 - params.epsilon_r) * (1.0 - states[:, 2])
     )
     return states, bold
-

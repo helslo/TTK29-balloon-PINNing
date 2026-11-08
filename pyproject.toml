@@ -1,7 +1,7 @@
 [project]
 name = "ttk29-balloon-pinning"
 version = "0.1.0"
-description = "Add your description here"
+description = "Compare hemodynamic models and voxel sensor placement on fMRI BOLD signals"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [

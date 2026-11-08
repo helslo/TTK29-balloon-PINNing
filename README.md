@@ -2,13 +2,14 @@
 
 # TTK29 Project: Hybrid Modeling of Cerebral Hemodynamics
 
-## 1. Goal
+## 1. Project description
 
-The implemented comparison workflow evaluates the Balloon-Windkessel model,
-PINN, and CoSTA on BOLD time series derived from real task-fMRI data. A
-separate sensor-placement workflow evaluates voxel-level reconstruction.
-
-This is a course project (TTK29, 3.75 study points) designed to build modeling skills that feed directly into a related masters project on BOLD-signal analysis in mental health disorders.
+This project studies how computational models can explain task-fMRI BOLD
+signals. It compares the Balloon-Windkessel model with a physics-informed
+neural network (PINN) and the CoSTA hybrid model, and includes a separate
+voxel sensor-placement workflow for evaluating signal reconstruction. The
+analysis tools use fMRI data to fit models, compare their results, and
+generate metrics and visualizations.
 
 Relevant articles:
 - https://www.sciencedirect.com/science/article/pii/S105381190090630X
@@ -57,12 +58,12 @@ and execute that file. The package can also be run with
 
 Comparison commands use the real `sub-10159` BIDS scan under `data/ds000030`
 when no CSV or subject is specified. Without an aligned `--roi-mask`, they
-compute an EPI-derived brain mask and extract the whole-brain mean BOLD trace.
-The loader preserves raw intensity until it computes fractional change from
-the whole-run median; it does not detrend or standardize the signal first.
-Event boxcars are averaged over each TR interval so events between volume
-timestamps are retained. Use `--synthetic` explicitly for generated test
-data.
+compute an explicit EPI-derived brain mask and extract the brain-mean BOLD
+trace. The loader preserves raw intensity until it computes fractional change
+from the whole-run median, interpolates isolated one-volume spikes, then
+removes linear drift. Labeled GO and STOP events regardless of outcome are
+averaged over each TR interval. Use `--synthetic` explicitly for generated
+test data.
 
 ## 3. Theory primer: the math behind the models
 

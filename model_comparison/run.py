@@ -107,11 +107,16 @@ def run(
             )
         physical_bold = np.interp(times, physical_time, physical_bold)
         physical_states = np.vstack([np.interp(times, physical_time, state) for state in physical_states])
+        if fit_physical:
+            physical_bold = fit.fitted_bold
         physical_metrics = {"mse": float(np.mean((observed_bold - physical_bold) ** 2)), "r2": r2_score(observed_bold, physical_bold)}
         physical_parameters = {
             name: float(getattr(params, name))
             for name in ("kappa", "gamma", "tau", "alpha", "E0", "V0", "eps", "nu0", "r0", "epsilon_r", "TE")
         }
+        if fit_physical:
+            physical_parameters["observation_baseline"] = fit.observation_baseline
+            physical_parameters["observation_linear_drift"] = fit.observation_linear_drift
         save_run(output_dir / "physical_model.npz", times, input_values, observed_bold, physical_states, physical_bold, physical_metrics, physical_parameters)
         metrics.update({f"physical_{key}": value for key, value in physical_metrics.items()})
 
@@ -123,6 +128,7 @@ def run(
             name: float(getattr(params, name))
             for name in ("kappa", "gamma", "tau", "alpha", "E0", "V0", "eps", "nu0", "r0", "epsilon_r", "TE")
         }
+        pinn_parameters["V0"] = float(model.v0.detach())
         save_run(output_dir / "pinn_model.npz", times, input_values, observed_bold, pinn_states, pinn_bold, pinn_metrics, pinn_parameters)
         np.savez(output_dir / "pinn_loss.npz", **{key: np.asarray(value) for key, value in history.items()})
         metrics.update({f"pinn_{key}": value for key, value in pinn_metrics.items()})

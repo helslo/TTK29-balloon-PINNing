@@ -23,7 +23,7 @@ class CoSTAConfig:
     correction_penalty: float = 1e-2
     smoothness_penalty: float = 1e-2
     max_correction_scale: float = 3.0
-    patience: int = 100
+    patience: int = 200
     seed: int = 17
 
 
