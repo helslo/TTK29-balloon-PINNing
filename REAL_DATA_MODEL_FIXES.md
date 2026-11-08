@@ -162,3 +162,95 @@ unmodeled acquisition and motion noise.
 The corrected-mask CLI comparison completed successfully on `sub-10159`.
 All eight tests pass, including the new mask-wiring test and existing
 isolated-spike, event, and fitting tests.
+
+## Fourth pass: fMRIPrep confounds and ROI-level comparison
+
+### What is available in this checkout
+
+The local `data/ds000030` tree contains raw task-stopsignal BOLD images and
+events for multiple subjects, but no `derivatives/fmriprep` directory. That
+means the comparison could not be rerun here on fMRIPrep-cleaned data. The
+repository's separate sensor-placement workflow already expects fMRIPrep
+derivatives, but its presence is not evidence that the files are installed in
+this checkout.
+
+The comparison previously accepted an ROI mask but did not explicitly resample
+or validate mask overlap, had no confounds-regression path, and had no way to
+discover fMRIPrep files. Also, the existing Julich mask utility defaults to
+left M1, which should not be treated as a stop-signal ROI.
+
+### Changes made
+
+- Added `--fmriprep` discovery for a unique task-stopsignal preprocessed BOLD
+  run, associated confounds TSV, and fMRIPrep brain mask when available.
+  Multiple matching runs now produce a clear error that asks the user to
+  select a BOLD image explicitly instead of silently choosing one.
+- Added `--confounds-path` for explicit BOLD/confounds pairing. Confound
+  regression uses available motion parameters and expansions, white-matter
+  and CSF signals, up to six aCompCor components, cosine drift regressors, and
+  non-steady-state outlier columns. Global-signal regression is intentionally
+  excluded by default.
+- ROI masks are now nearest-neighbor resampled to the BOLD grid and validated
+  for spatial overlap. Without an ROI, the loader uses an fMRIPrep brain mask
+  when available and otherwise computes an EPI brain mask.
+- The comparison writes `timeseries_metadata.json` with the BOLD, events, ROI,
+  brain-mask, and confounds paths, plus the selected confound columns.
+- Updated both CLI entry points, the editable comparison runner, usage docs,
+  and focused regression tests.
+
+### How to test
+
+If fMRIPrep derivatives are available at
+`data/ds000030/derivatives/fmriprep`, test a supplied ROI with:
+
+```bash
+uv run python -m ttk29_balloon_pinning compare \
+  --fmriprep --subject sub-10159 \
+  --roi-mask /path/to/your/roi_mask.nii.gz \
+  --epochs 2000
+```
+
+For a manually selected BOLD file, pass its matching confounds TSV explicitly
+with `--bold-path` and `--confounds-path`. If no ROI mask is supplied, the run
+uses the preprocessed brain mean rather than an ROI mean. ROI-specific
+improvement is not claimed until the same subject is evaluated with both masks;
+the ROI should be scientifically selected and documented.
+
+## Fifth pass: fetch Schaefer network masks with Nilearn
+
+The comparison now offers `--schaefer-network` to download/cache the Schaefer
+2018 400-parcel, Yeo-7 atlas using Nilearn, union the parcel labels for one
+selected network and hemisphere, and save that binary mask beside the run.
+`--schaefer-hemisphere` supports left, right, or both hemispheres. Metadata
+records the atlas, settings, and selected parcel labels. The project CLI and
+editable runner pass through these options.
+
+Schaefer's atlas is in MNI space. The new option therefore requires an
+MNI-space BOLD file and explicitly rejects the repository's raw native-space
+scan rather than making an anatomically invalid mask by matching array shapes.
+Use fMRIPrep derivatives with `--fmriprep`, or provide a normalized BOLD path
+whose BIDS filename identifies its MNI space. The selected network mask is
+resampled to the BOLD grid with nearest-neighbor interpolation.
+
+For an initial stop-signal comparison, run `Cont` and `SalVentAttn` separately:
+
+```bash
+uv run python -m ttk29_balloon_pinning compare \
+  --fmriprep --subject sub-10159 --schaefer-network Cont --epochs 2000
+uv run python -m ttk29_balloon_pinning compare \
+  --fmriprep --subject sub-10159 --schaefer-network SalVentAttn --epochs 2000
+```
+
+These are broad Yeo networks, not validated anatomical stop-signal ROIs, and
+fit improvement is not assumed. Compare each to a whole-brain baseline on the
+same preprocessed run, and report the atlas-derived ROI and its labels.
+
+### Input file locations
+
+The comparison's normal (non-`--fmriprep`) subject path is the raw stop-signal
+data under `data/ds000030/<subject>/func/`. For example, selecting
+`--subject sub-10159` loads the BOLD and events files from that subject's
+`func` directory. The `--fmriprep` option in the atlas example above is
+deliberate: Schaefer is an MNI atlas, and the raw BIDS stop-signal BOLD is not
+registered to that atlas. Using the atlas with raw BOLD by matching array
+coordinates or resampling alone would yield an anatomically invalid ROI.

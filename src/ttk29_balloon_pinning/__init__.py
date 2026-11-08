@@ -28,10 +28,27 @@ def _build_parser() -> argparse.ArgumentParser:
         subparser.add_argument("--bold-path", type=Path, help="Preprocessed BOLD NIfTI; overrides the raw subject path")
         subparser.add_argument("--events-path", type=Path, help="Events TSV; defaults to the subject's raw BIDS events file")
         subparser.add_argument(
+            "--fmriprep",
+            action="store_true",
+            help="Use the subject's fMRIPrep task-stopsignal BOLD and matching confounds",
+        )
+        subparser.add_argument(
             "--roi-mask",
             type=Path,
-            help="Aligned ROI mask NIfTI; if omitted, extract the EPI-masked whole-brain mean",
+            help="ROI mask NIfTI; resampled to the BOLD grid. Without it, use a brain-wide mean",
         )
+        subparser.add_argument(
+            "--schaefer-network",
+            choices=("Vis", "SomMot", "DorsAttn", "SalVentAttn", "Limbic", "Cont", "Default"),
+            help="Build a Schaefer 2018 Yeo-7 network mask; requires MNI-space BOLD",
+        )
+        subparser.add_argument(
+            "--schaefer-hemisphere",
+            choices=("left", "right", "both"),
+            default="both",
+            help="Hemisphere(s) for --schaefer-network",
+        )
+        subparser.add_argument("--confounds-path", type=Path, help="fMRIPrep confounds TSV")
         subparser.add_argument(
             "--synthetic",
             action="store_true",
@@ -95,8 +112,16 @@ def main(argv: list[str] | None = None) -> None:
             command_argv.extend(["--bold-path", str(args.bold_path)])
         if getattr(args, "events_path", None) is not None:
             command_argv.extend(["--events-path", str(args.events_path)])
+        if getattr(args, "fmriprep", False):
+            command_argv.append("--fmriprep")
         if getattr(args, "roi_mask", None) is not None:
             command_argv.extend(["--roi-mask", str(args.roi_mask)])
+        if getattr(args, "schaefer_network", None) is not None:
+            command_argv.extend(["--schaefer-network", args.schaefer_network])
+        if getattr(args, "schaefer_hemisphere", "both") != "both":
+            command_argv.extend(["--schaefer-hemisphere", args.schaefer_hemisphere])
+        if getattr(args, "confounds_path", None) is not None:
+            command_argv.extend(["--confounds-path", str(args.confounds_path)])
         if getattr(args, "output_dir", None) is not None:
             command_argv.extend(["--output-dir", str(args.output_dir)])
         if getattr(args, "epochs", None) is not None:

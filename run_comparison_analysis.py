@@ -15,6 +15,11 @@ EPOCHS = 2000
 DATA_FILE: Path | None = None
 SUBJECT: str | None = None
 ROI_MASK: Path | None = None
+BOLD_PATH: Path | None = None
+CONFOUNDS_PATH: Path | None = None
+USE_FMRIPREP = False
+SCHAEFER_NETWORK: str | None = None
+SCHAEFER_HEMISPHERE = "both"
 
 # Leave OUTPUT_DIR unset to create a timestamped folder under results/.
 OUTPUT_DIR: Path | None = None
@@ -30,6 +35,16 @@ def main_from_config() -> None:
         arguments.extend(["--subject", SUBJECT])
     if ROI_MASK is not None:
         arguments.extend(["--roi-mask", str(ROI_MASK)])
+    if SCHAEFER_NETWORK is not None:
+        arguments.extend(["--schaefer-network", SCHAEFER_NETWORK])
+    if SCHAEFER_HEMISPHERE != "both":
+        arguments.extend(["--schaefer-hemisphere", SCHAEFER_HEMISPHERE])
+    if BOLD_PATH is not None:
+        arguments.extend(["--bold-path", str(BOLD_PATH)])
+    if CONFOUNDS_PATH is not None:
+        arguments.extend(["--confounds-path", str(CONFOUNDS_PATH)])
+    if USE_FMRIPREP:
+        arguments.append("--fmriprep")
     if OUTPUT_DIR is not None:
         arguments.extend(["--output-dir", str(OUTPUT_DIR)])
     if not FIT_PHYSICAL_MODEL:

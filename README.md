@@ -56,14 +56,53 @@ simple, readable run, edit the constants at the top of
 and execute that file. The package can also be run with
 `python -m model_comparison`.
 
-Comparison commands use the real `sub-10159` BIDS scan under `data/ds000030`
-when no CSV or subject is specified. Without an aligned `--roi-mask`, they
-compute an explicit EPI-derived brain mask and extract the brain-mean BOLD
-trace. The loader preserves raw intensity until it computes fractional change
-from the whole-run median, interpolates isolated one-volume spikes, then
-removes linear drift. Labeled GO and STOP events regardless of outcome are
-averaged over each TR interval. Use `--synthetic` explicitly for generated
-test data.
+Comparison commands use the raw stop-signal files under
+`data/ds000030/<subject>/func/` by default. For example, `--subject sub-10159`
+loads `sub-10159_task-stopsignal_bold.nii.gz` and
+`sub-10159_task-stopsignal_events.tsv` from that directory. You can also pass
+those files explicitly with `--bold-path` and `--events-path`. Without an ROI
+mask, raw BOLD uses an EPI-derived brain mask to extract a brain-mean trace.
+The loader preserves raw intensity until it computes fractional change from
+the whole-run median, interpolates isolated one-volume spikes, then removes
+linear drift. Labeled GO and STOP events regardless of outcome are averaged
+over each TR interval. Use `--synthetic` explicitly for generated test data.
+
+The Schaefer atlas is in MNI space and cannot be correctly aligned to the raw
+native-space BOLD using resampling alone. For an atlas network ROI, normalized
+MNI-space BOLD and its fMRIPrep confounds are required. If those derivatives
+are available under `data/ds000030/derivatives/fmriprep`, run:
+
+```bash
+uv run python -m ttk29_balloon_pinning compare \
+  --fmriprep --subject sub-10159 \
+  --schaefer-network Cont \
+  --epochs 2000
+```
+
+`--fmriprep` selects one unambiguous `task-stopsignal` derivative, its matching
+confounds TSV, and its brain mask when present. If multiple runs match, specify
+one with `--bold-path` and pass its confounds using `--confounds-path`.
+`--schaefer-network` downloads/caches the 400-parcel, 7-network Schaefer 2018
+atlas via Nilearn and creates a binary mask for the requested network. Choose
+`Cont`, `SalVentAttn`, or another Yeo-7 network; `--schaefer-hemisphere` can
+restrict the mask to `left` or `right` (default: `both`). The atlas is in MNI
+space, so this option requires MNI-space BOLD; it must not be used with the
+raw native-space scan. The generated mask and its selected parcel labels are
+saved with the run.
+Confound regression includes available motion parameters and expansions,
+white-matter/CSF signals, up to six aCompCor components, cosine drift terms,
+and non-steady-state outlier columns. Global-signal regression is intentionally
+not enabled by default. ROI masks are resampled to the BOLD grid with
+nearest-neighbor interpolation; the mask must spatially overlap the image.
+Without `--roi-mask`, the fMRIPrep brain mask (or an EPI-derived mask) is
+averaged instead. Each BIDS run saves `timeseries_metadata.json` alongside the
+input CSV to record the selected files and preprocessing choices.
+
+Schaefer networks are atlas-defined network parcels, not a validated
+stop-signal anatomical ROI. Treat `Cont` and `SalVentAttn` as candidate
+analyses, keep their results separate, and compare them with the whole-brain
+baseline; improved fit is not guaranteed. A manually selected anatomical ROI
+mask can still be passed with `--roi-mask`.
 
 ## 3. Theory primer: the math behind the models
 

@@ -10,10 +10,11 @@ uv run python run_comparison_analysis.py
 
 The script defaults to a full comparison with 2000 epochs using the real
 `sub-10159` scan under `data/ds000030` and saves outputs in a timestamped folder
-under `results/`. With no `ROI_MASK`, it computes an explicit EPI-derived brain
-mask and uses the brain-mean BOLD trace. Set `MODE` to `"physical"`, `"pinn"`, or
-`"costa"` to run just one model. `DATA_FILE`, `SUBJECT`, `ROI_MASK`, and
-`OUTPUT_DIR` are optional settings. For synthetic test data, use
+under `results/`. With no `ROI_MASK`, raw BOLD uses an explicit EPI-derived
+brain mask and fMRIPrep BOLD uses its brain mask when available. Set
+`MODE` to `"physical"`, `"pinn"`, or `"costa"` to run just one model.
+`DATA_FILE`, `SUBJECT`, `ROI_MASK`, and `OUTPUT_DIR` are optional settings.
+For synthetic test data, use
 `uv run python -m ttk29_balloon_pinning compare --synthetic`.
 
 The real-data loader preserves raw intensity until it converts the ROI signal
@@ -22,6 +23,55 @@ one-volume spikes, then removes linear drift. Event durations for labeled GO
 and STOP trials are averaged over each TR interval regardless of trial
 outcome, preserving events between volume timestamps and avoiding a
 successful-GO-only input.
+
+## fMRIPrep and ROI comparison
+
+By default, the comparison reads the raw stop-signal BOLD and events files
+from `data/ds000030/<subject>/func/`. For example:
+
+```bash
+uv run python -m ttk29_balloon_pinning compare --subject sub-10159 --epochs 2000
+```
+
+This uses `sub-10159_task-stopsignal_bold.nii.gz` and
+`sub-10159_task-stopsignal_events.tsv` directly. `--bold-path` and
+`--events-path` can override either raw file. Without an ROI mask this runs on
+the raw EPI-derived brain-mean signal.
+
+The Schaefer atlas is in MNI space and cannot be correctly aligned to native
+raw BOLD using resampling alone. For a Schaefer network ROI, normalized
+MNI-space BOLD and its fMRIPrep confounds are required. If those derivatives
+are available under `data/ds000030/derivatives/fmriprep`, run:
+
+```bash
+uv run python -m ttk29_balloon_pinning compare \
+  --fmriprep --subject sub-10159 \
+  --schaefer-network Cont \
+  --epochs 2000
+```
+
+The `--fmriprep` option discovers a unique task-stopsignal preprocessed BOLD
+image, the associated confounds TSV, and its brain mask if present. It stops
+with an error if multiple runs match rather than choosing an arbitrary run.
+For a manually selected run, use `--bold-path /path/to/desc-preproc_bold.nii.gz`
+and `--confounds-path /path/to/desc-confounds_timeseries.tsv` instead. Use
+`--events-path` if your events file is not at the raw BIDS default location.
+
+`--schaefer-network` fetches/caches the 400-parcel, 7-network Schaefer 2018
+atlas using Nilearn, then saves a binary network mask and its parcel labels in
+the output directory. Supported networks include `Cont` and `SalVentAttn`;
+`--schaefer-hemisphere left|right|both` selects the hemisphere (default:
+`both`). This atlas is in MNI space, so the option rejects raw native-space
+BOLD. A manually supplied `--roi-mask` remains available and is resampled to
+the BOLD grid with nearest-neighbor interpolation; the mask must overlap the
+BOLD image. If neither ROI option is supplied, the pipeline uses the
+fMRIPrep brain mask when available, otherwise computes an EPI brain mask. The
+selected signal is the mean across mask voxels. Global-signal regression is
+excluded by default; available motion, tissue, aCompCor, cosine, and
+non-steady-state regressors are used when a confounds TSV is supplied. The
+output `timeseries_metadata.json` records the selected inputs and confound
+columns. Schaefer networks are candidates, not validated stop-signal ROIs;
+evaluate each separately against the whole-brain baseline on the same scan.
 
 The project CLI remains available when you prefer command-line options:
 
