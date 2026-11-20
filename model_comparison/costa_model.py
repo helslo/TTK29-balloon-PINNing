@@ -11,6 +11,23 @@ import torch
 from torch import nn
 
 
+def _temporal_validation_mask(
+    sample_count: int, validation_fraction: float = 0.2
+) -> np.ndarray:
+    """Reserve a contiguous final block for chronological validation."""
+    if sample_count < 5:
+        raise ValueError("at least five samples are required for a train/validation split")
+    if not 0.0 < validation_fraction < 1.0:
+        raise ValueError("validation_fraction must be between zero and one")
+    validation_count = min(
+        max(2, int(np.ceil(sample_count * validation_fraction))),
+        sample_count - 3,
+    )
+    validation_mask = np.zeros(sample_count, dtype=bool)
+    validation_mask[-validation_count:] = True
+    return validation_mask
+
+
 @dataclass
 class CoSTAConfig:
     """Training settings for the learned physical-model correction."""
@@ -83,6 +100,7 @@ def train_costa(
     physical_states: np.ndarray,
     physical_bold: np.ndarray,
     config: CoSTAConfig | None = None,
+    validation_fraction: float = 0.2,
 ) -> Tuple[CoSTAResidual, Dict[str, list]]:
     """Learn a regularized residual correction from one observed BOLD trace."""
     if config is None:
@@ -117,11 +135,11 @@ def train_costa(
         raise ValueError("times must span a positive duration")
     features = _features(times, input_values, physical_states, physical_bold)
     residual = observed_bold - physical_bold
-    validation_mask = np.arange(sample_count) % 5 == 0
-    validation_mask[0] = False
+    validation_mask = _temporal_validation_mask(sample_count, validation_fraction)
     if np.count_nonzero(validation_mask) < 2:
         raise ValueError("at least two validation samples are required")
     training_mask = ~validation_mask
+    validation_start = int(np.flatnonzero(validation_mask)[0])
     feature_mean = features[training_mask].mean(axis=0)
     feature_scale = features[training_mask].std(axis=0)
     feature_scale[feature_scale < 1e-6] = 1.0
@@ -150,11 +168,16 @@ def train_costa(
         model.train()
         optimizer.zero_grad()
         correction = model(feature_tensor)
-        normalized_error = (correction - residual_tensor) / residual_scale
-        correction_size = correction / residual_scale
-        second_difference = correction[2:] - 2.0 * correction[1:-1] + correction[:-2]
+        normalized_error = (correction[training_tensor] - residual_tensor[training_tensor]) / residual_scale
+        correction_size = correction[training_tensor] / residual_scale
+        training_correction = correction[:validation_start]
+        second_difference = (
+            training_correction[2:]
+            - 2.0 * training_correction[1:-1]
+            + training_correction[:-2]
+        )
         loss = (
-            normalized_error[training_tensor].square().mean()
+            normalized_error.square().mean()
             + config.correction_penalty * correction_size.square().mean()
             + config.smoothness_penalty * (second_difference / residual_scale).square().mean()
         )

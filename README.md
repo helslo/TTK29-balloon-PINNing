@@ -34,6 +34,10 @@ uv run python -m ttk29_balloon_pinning costa --epochs 2000
 # full comparison of all methods on the same dataset
 uv run python -m ttk29_balloon_pinning compare --epochs 2000
 
+# CoSTA extrapolation test on the same run (60% train / 20% validation / 20% test)
+uv run python -m ttk29_balloon_pinning compare \
+  --fmriprep --subject sub-10159 --extrapolation-test --epochs 2000
+
 # use generated input for a quick synthetic test instead
 uv run python -m ttk29_balloon_pinning compare --synthetic
 
@@ -67,6 +71,39 @@ the whole-run median, interpolates isolated one-volume spikes, then removes
 linear drift. Labeled GO and STOP events regardless of outcome are averaged
 over each TR interval. Use `--synthetic` explicitly for generated test data.
 
+For a separate CoSTA temporal extrapolation check, use
+`--extrapolation-test` with the comparison command. It fits the physical
+baseline and trains CoSTA on the first 60% of the run, selects CoSTA's
+checkpoint using the next 20%, and evaluates once on the final untouched
+20%. The full event/input sequence is supplied, so this is same-run,
+same-participant conditional extrapolation with known future input—not a
+forecast of unknown task events or a test of a new participant/run. Metrics
+and predictions are saved as `extrapolation_metrics.json` and
+`extrapolation_predictions.npz` in the output directory.
+
+## Using a shared BIDS/fMRIPrep data folder
+
+The project reads its dataset root from `TTK29_DATA_ROOT` when set; otherwise
+it uses the shared dataset path configured in
+`src/ttk29_balloon_pinning/config.py`. Point the variable at the BIDS dataset
+root (the directory containing `participants.tsv` and `sub-*/`). For fMRIPrep,
+the project supports subject-level files directly under `sub-*/func/` and the
+standard `derivatives/fmriprep/sub-*/func/` layout. For example:
+
+```bash
+export TTK29_DATA_ROOT="/path/to/shared/ds000030"
+uv run python -m ttk29_balloon_pinning compare --fmriprep --subject sub-10159
+```
+
+The same environment setting is used by the comparison and sensor workflows
+and by `read_data.py`. An explicit `--data-root /path/to/dataset` overrides
+the environment variable for a CLI run. In `run_comparison_analysis.py`, set
+`DATA_ROOT = Path("/path/to/shared/ds000030")` to override it for that runner.
+The fMRIPrep comparison also needs the subject's events TSV in the dataset's
+raw `sub-*/func/` directory; use `--events-path` if it is stored elsewhere.
+The project reads the shared files in place and does not copy them into the
+repository's `data/` directory.
+
 The Schaefer atlas is in MNI space and cannot be correctly aligned to the raw
 native-space BOLD using resampling alone. For an atlas network ROI, normalized
 MNI-space BOLD and its fMRIPrep confounds are required. If those derivatives
@@ -80,8 +117,14 @@ uv run python -m ttk29_balloon_pinning compare \
 ```
 
 `--fmriprep` selects one unambiguous `task-stopsignal` derivative, its matching
-confounds TSV, and its brain mask when present. If multiple runs match, specify
-one with `--bold-path` and pass its confounds using `--confounds-path`.
+confounds TSV, and its brain mask when present. It recognizes both standard
+fMRIPrep filenames and names such as
+`sub-10159_task-stopsignal_bold_space-MNI152NLin2009cAsym_preproc.nii.gz`,
+with matching `..._bold_confounds.tsv` and `..._brainmask.nii.gz` files. If
+multiple runs match, specify one with `--bold-path` and pass its confounds
+using `--confounds-path`. Events are found first in the configured dataset and
+then under the project's local `data/` folder; use `--events-path` to choose a
+different file explicitly.
 `--schaefer-network` downloads/caches the 400-parcel, 7-network Schaefer 2018
 atlas via Nilearn and creates a binary mask for the requested network. Choose
 `Cont`, `SalVentAttn`, or another Yeo-7 network; `--schaefer-hemisphere` can
@@ -91,8 +134,10 @@ raw native-space scan. The generated mask and its selected parcel labels are
 saved with the run.
 Confound regression includes available motion parameters and expansions,
 white-matter/CSF signals, up to six aCompCor components, cosine drift terms,
-and non-steady-state outlier columns. Global-signal regression is intentionally
-not enabled by default. ROI masks are resampled to the BOLD grid with
+and non-steady-state outlier columns. It accepts both standard fMRIPrep names
+and the shared dataset's `X`/`Y`/`Z`, `RotX`/`RotY`/`RotZ`,
+`WhiteMatter`, and `aCompCor00` naming. Global-signal regression is
+intentionally not enabled by default. ROI masks are resampled to the BOLD grid with
 nearest-neighbor interpolation; the mask must spatially overlap the image.
 Without `--roi-mask`, the fMRIPrep brain mask (or an EPI-derived mask) is
 averaged instead. Each BIDS run saves `timeseries_metadata.json` alongside the
@@ -163,6 +208,17 @@ where `M` selects the measured rows and `A` maps measurements back to the full v
 This is the core of the sensor-placement workflow: choose a small set of
 informative voxels, reconstruct the rest, and evaluate how quickly the error
 rises as `k` becomes smaller.
+
+The implementation compares uniform-random voxel selection with greedy,
+QR-pivoted row selection on a training-fitted truncated-SVD basis. It then
+reconstructs in that basis by regularized least squares. An optional
+compressed-sensing method (`--include-l1`) instead assumes each 3D volume has
+a sparse orthonormal DCT representation and uses FISTA to minimize a
+measurement-fit term plus an L1 penalty on DCT coefficients. These are
+in-silico voxel measurements from fully sampled fMRI, not physical sensor
+hardware. QR pivoting is a greedy design heuristic, not a proof of globally
+optimal placement; results depend on the training cohort and spatial
+preprocessing.
 
 ## 4. Core physical model: the Balloon(-Windkessel) model
 
@@ -379,7 +435,7 @@ The repository also accepts a subject's BOLD NIfTI and event TSV directly:
 uv run python -m model_comparison \
 	--mode compare \
 	--subject sub-10159 \
-	--bold-path /path/to/fmriprep/sub-10159_task-stopsignal_space-MNI152NLin2009cAsym_desc-preproc_bold.nii.gz \
+	--bold-path /path/to/fmriprep/sub-10159_task-stopsignal_bold_space-MNI152NLin2009cAsym_preproc.nii.gz \
 	--roi-mask /path/to/sub-10159_left-precentral-mask.nii.gz \
 	--epochs 1000 \
 	--output-dir results/sub-10159
@@ -392,8 +448,9 @@ to that scanner-space image directly.
 
 The subject path creates `results/sub-10159/sub-10159_timeseries.csv` with
 `time`, `input`, and baseline-normalized `bold` columns, then feeds that exact
-series to both models. GO trials with `TrialOutcome == SuccessfulGo` form the
-initial input; STOP trials can be added later as a second input channel.
+series to both models. The current stop-signal input includes every labeled
+GO and STOP event, regardless of outcome, with event overlap averaged over
+each TR. GO and STOP are not yet represented as separate input channels.
 The physical model is fitted by default. Use `--no-fit-physical` only for a
 fixed-parameter forward simulation.
 

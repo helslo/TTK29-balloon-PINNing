@@ -3,10 +3,13 @@ import openneuro as on
 from nilearn import datasets
 from typing import Optional
 
+from ttk29_balloon_pinning.config import get_data_root
+
 
 DATASET = "ds000030"
-PARTICIPANTS_FILE = "data/participants.tsv"
-TARGET_DIR = "data/ds000030"
+DATA_ROOT = get_data_root()
+PARTICIPANTS_FILE = DATA_ROOT / "participants.tsv"
+TARGET_DIR = DATA_ROOT
 TASK = "stopsignal"
 ROI = "Precentral Gyrus"
 N: Optional[int] = 15
@@ -54,4 +57,3 @@ if __name__ == "__main__":
     print(", ".join(selected["participant_id"]))
     load_roi()
     download_selected_data(selected)
-

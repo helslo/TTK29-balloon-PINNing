@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from .config import get_data_root
+
 
 def _build_parser() -> argparse.ArgumentParser:
     """Construct the main project CLI."""
@@ -24,7 +26,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "--subject",
             help="BIDS subject ID; defaults to sub-10159 when no other input is provided",
         )
-        subparser.add_argument("--data-root", type=Path, default=Path("data/ds000030"))
+        subparser.add_argument("--data-root", type=Path, default=get_data_root())
         subparser.add_argument("--bold-path", type=Path, help="Preprocessed BOLD NIfTI; overrides the raw subject path")
         subparser.add_argument("--events-path", type=Path, help="Events TSV; defaults to the subject's raw BIDS events file")
         subparser.add_argument(
@@ -49,6 +51,7 @@ def _build_parser() -> argparse.ArgumentParser:
             help="Hemisphere(s) for --schaefer-network",
         )
         subparser.add_argument("--confounds-path", type=Path, help="fMRIPrep confounds TSV")
+        subparser.add_argument("--echo-time", type=float, help="BOLD echo time in seconds")
         subparser.add_argument(
             "--synthetic",
             action="store_true",
@@ -57,9 +60,15 @@ def _build_parser() -> argparse.ArgumentParser:
         subparser.add_argument("--output-dir", type=Path, help="Directory for results; defaults to a timestamped folder under results/")
         subparser.add_argument("--epochs", type=int, default=2000)
         subparser.add_argument("--no-fit-physical", action="store_true", help="Use default Balloon parameters")
+        if command_name == "compare":
+            subparser.add_argument(
+                "--extrapolation-test",
+                action="store_true",
+                help="Run a 60/20/20 chronological CoSTA extrapolation evaluation",
+            )
 
     sensor_parser = subparsers.add_parser("sensor", help="Run the sparse sensor-placement analysis")
-    sensor_parser.add_argument("--data-root", type=Path, default=Path("data/ds000030"))
+    sensor_parser.add_argument("--data-root", type=Path, default=get_data_root())
     sensor_parser.add_argument("--task", default="rest")
     sensor_parser.add_argument("--max-participants", type=int, default=20)
     sensor_parser.add_argument("--include-all-diagnoses", action="store_true")
@@ -122,12 +131,16 @@ def main(argv: list[str] | None = None) -> None:
             command_argv.extend(["--schaefer-hemisphere", args.schaefer_hemisphere])
         if getattr(args, "confounds_path", None) is not None:
             command_argv.extend(["--confounds-path", str(args.confounds_path)])
+        if getattr(args, "echo_time", None) is not None:
+            command_argv.extend(["--echo-time", str(args.echo_time)])
         if getattr(args, "output_dir", None) is not None:
             command_argv.extend(["--output-dir", str(args.output_dir)])
         if getattr(args, "epochs", None) is not None:
             command_argv.extend(["--epochs", str(args.epochs)])
         if getattr(args, "no_fit_physical", False):
             command_argv.append("--no-fit-physical")
+        if getattr(args, "extrapolation_test", False):
+            command_argv.append("--extrapolation-test")
         if args.synthetic:
             command_argv.append("--synthetic")
         comparison_main(command_argv)

@@ -12,6 +12,7 @@ from scipy.sparse.linalg import svds
 
 Reconstruction = Callable[[np.ndarray], np.ndarray]
 MAX_SVD_RANK = 64
+MAX_SENSOR_SYSTEM_CONDITION = 10.0
 
 
 def _low_rank_basis(
@@ -66,12 +67,27 @@ def _low_rank_basis(
 def _reconstruct_from_basis(
     basis: np.ndarray, sensors: np.ndarray, observed: np.ndarray
 ) -> np.ndarray:
-    """Solve a small ridge-regularized least-squares problem in the fitted SVD modes."""
+    """Solve a condition-regularized least-squares problem in the fitted SVD modes."""
     system = basis[sensors, :].astype(np.float64, copy=False)
     y = np.asarray(observed[sensors, :], dtype=np.float64)
     if not np.isfinite(system).all() or not np.isfinite(y).all():
         raise ValueError("Sensor measurements and basis must contain only finite values")
-    ridge = max(float(np.sum(system**2)) / max(system.shape[1], 1), 1.0) * 1e-8
+    singular_values = np.linalg.svd(system, compute_uv=False)
+    if singular_values.size:
+        largest_squared = float(singular_values[0] ** 2)
+        smallest_squared = float(singular_values[-1] ** 2)
+        condition_squared = MAX_SENSOR_SYSTEM_CONDITION**2
+        ridge = max(
+            (largest_squared - condition_squared * smallest_squared)
+            / (condition_squared - 1.0),
+            0.0,
+        )
+    else:
+        ridge = 0.0
+    ridge = max(
+        ridge,
+        np.finfo(np.float64).eps * max(float(np.sum(system**2)), 1.0),
+    )
     augmented_system = np.vstack(
         [system, np.sqrt(ridge) * np.eye(system.shape[1])]
     )

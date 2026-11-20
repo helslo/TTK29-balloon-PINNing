@@ -32,6 +32,12 @@ def plot_error_curves(results: pd.DataFrame, output_dir: str | Path) -> Path:
         "l1_random": "Random + 3D DCT L1",
         "l1_qr": "QR pivoting + 3D DCT L1",
     }
+    colors = {
+        "random": "#E07A24",
+        "qr": "#2878B5",
+        "l1_random": "#8064A2",
+        "l1_qr": "#30966A",
+    }
     for holdout in ("temporal", "participant"):
         subset = results[results["holdout"] == holdout]
         if subset.empty:
@@ -45,16 +51,29 @@ def plot_error_curves(results: pd.DataFrame, output_dir: str | Path) -> Path:
         for method, group in summary.groupby("method"):
             group = group.sort_values("k")
             label = labels.get(method, method)
-            axis.plot(group["k"], group["mean"], marker="o", label=label)
-            if method in {"random", "l1_random"}:
-                spread = group["std"].fillna(0.0).to_numpy()
-                axis.fill_between(
-                    group["k"].to_numpy(),
-                    group["mean"].to_numpy() - spread,
-                    group["mean"].to_numpy() + spread,
-                    alpha=0.18,
-                )
+            color = colors.get(method)
+            axis.plot(
+                group["k"], group["mean"], marker="o", label=label, color=color
+            )
+            spread = group["std"].fillna(0.0).to_numpy()
+            axis.fill_between(
+                group["k"].to_numpy(),
+                group["mean"].to_numpy() - spread,
+                group["mean"].to_numpy() + spread,
+                alpha=0.18,
+                color=color,
+            )
         axis.set_xscale("log")
+        sensor_counts = sorted(int(value) for value in subset["k"].unique())
+        axis.set_xticks(sensor_counts, labels=[str(value) for value in sensor_counts])
+        axis.axhline(
+            1.0,
+            color="#555555",
+            linewidth=1,
+            linestyle="--",
+            label="Zero-reconstruction reference",
+        )
+        axis.set_ylim(bottom=0.0)
         axis.set_xlabel("Number of measured voxels (k)")
         axis.set_ylabel("Normalized RMSE")
         axis.set_title(f"Voxel reconstruction error: {holdout} hold-out")

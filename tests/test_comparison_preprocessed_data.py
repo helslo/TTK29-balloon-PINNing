@@ -16,8 +16,12 @@ from model_comparison.data_pipeline import (
     select_fmriprep_confounds,
 )
 from model_comparison.run import (
+    PROJECT_DATA_ROOT,
+    _fmriprep_brain_mask_for_bold,
     _fmriprep_confounds_for_bold,
     discover_fmriprep_bold,
+    discover_echo_time,
+    discover_events_tsv,
 )
 
 
@@ -117,8 +121,142 @@ class FmriprepConfoundTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "no supported fMRIPrep regressors"):
             select_fmriprep_confounds(pd.DataFrame({"framewise_displacement": [0.0, 1.0]}))
 
+    def test_selects_shared_dataset_confounds_column_names(self) -> None:
+        values = np.arange(20.0)
+        confounds = pd.DataFrame(
+            {
+                name: values * (index + 1) + index
+                for index, name in enumerate(
+                    (
+                        "X",
+                        "Y",
+                        "Z",
+                        "RotX",
+                        "RotY",
+                        "RotZ",
+                        "WhiteMatter",
+                        "GlobalSignal",
+                        "aCompCor00",
+                        "aCompCor01",
+                        "tCompCor00",
+                    )
+                )
+            }
+        )
+
+        selected = select_fmriprep_confounds(confounds)
+
+        self.assertEqual(
+            list(selected.columns),
+            [
+                "X",
+                "Y",
+                "Z",
+                "RotX",
+                "RotY",
+                "RotZ",
+                "WhiteMatter",
+                "aCompCor00",
+                "aCompCor01",
+            ],
+        )
+        self.assertTrue(np.isfinite(selected.to_numpy()).all())
+
 
 class FmriprepDiscoveryTests(unittest.TestCase):
+    def test_discovers_echo_time_from_raw_acquisition_sidecar(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            data_root = Path(temporary_directory)
+            func_dir = data_root / "sub-10159" / "func"
+            func_dir.mkdir(parents=True)
+            bold_path = func_dir / (
+                "sub-10159_task-stopsignal_bold_space-MNI152NLin2009cAsym_"
+                "preproc.nii.gz"
+            )
+            bold_path.touch()
+            sidecar_path = func_dir / "sub-10159_task-stopsignal_bold.json"
+            sidecar_path.write_text(json.dumps({"EchoTime": 0.03}))
+
+            self.assertEqual(
+                discover_echo_time(data_root, "sub-10159", "stopsignal", bold_path),
+                (0.03, sidecar_path),
+            )
+
+    def test_returns_no_echo_time_when_no_sidecar_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            with patch("model_comparison.run.PROJECT_DATA_ROOT", root / "data"):
+                self.assertEqual(
+                    discover_echo_time(
+                        root,
+                        "sub-10159",
+                        "stopsignal",
+                        root / "preproc_bold.nii.gz",
+                    ),
+                    (None, None),
+                )
+
+    def test_discovers_events_tsv_in_configured_dataset(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            data_root = Path(temporary_directory)
+            events_path = (
+                data_root / "sub-10159" / "func"
+                / "sub-10159_task-stopsignal_events.tsv"
+            )
+            events_path.parent.mkdir(parents=True)
+            events_path.touch()
+
+            self.assertEqual(
+                discover_events_tsv(data_root, "sub-10159"), events_path
+            )
+
+    def test_falls_back_to_events_tsv_in_project_data(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            local_data = Path(temporary_directory)
+            events_path = (
+                local_data / "ds000030" / "sub-10159" / "func"
+                / "sub-10159_task-stopsignal_events.tsv"
+            )
+            events_path.parent.mkdir(parents=True)
+            events_path.touch()
+            with patch("model_comparison.run.PROJECT_DATA_ROOT", local_data):
+                self.assertEqual(
+                    discover_events_tsv(Path("/shared/fmriprep"), "sub-10159"),
+                    events_path,
+                )
+
+    def test_requires_explicit_path_when_events_are_not_found(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            with patch("model_comparison.run.PROJECT_DATA_ROOT", Path(temporary_directory)):
+                with self.assertRaisesRegex(FileNotFoundError, "--events-path"):
+                    discover_events_tsv(Path(temporary_directory), "sub-10159")
+
+    def test_discovers_preprocessed_bold_under_dataset_subject_func(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            data_root = Path(temporary_directory)
+            func_dir = data_root / "sub-10159" / "func"
+            func_dir.mkdir(parents=True)
+            bold_path = func_dir / (
+                "sub-10159_task-stopsignal_bold_space-MNI152NLin2009cAsym_"
+                "preproc.nii.gz"
+            )
+            bold_path.touch()
+            (func_dir / (
+                "sub-10159_task-stopsignal_bold_space-T1w_preproc.nii.gz"
+            )).touch()
+            confounds_path = func_dir / "sub-10159_task-stopsignal_bold_confounds.tsv"
+            confounds_path.touch()
+            brain_mask_path = func_dir / (
+                "sub-10159_task-stopsignal_bold_space-MNI152NLin2009cAsym_"
+                "brainmask.nii.gz"
+            )
+            brain_mask_path.touch()
+
+            discovered = discover_fmriprep_bold(data_root, "sub-10159")
+            self.assertEqual(discovered, bold_path)
+            self.assertEqual(_fmriprep_confounds_for_bold(discovered), confounds_path)
+            self.assertEqual(_fmriprep_brain_mask_for_bold(discovered), brain_mask_path)
+
     def test_discovers_unique_preprocessed_bold_and_matching_confounds(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             data_root = Path(temporary_directory)
@@ -155,7 +293,7 @@ class FmriprepDiscoveryTests(unittest.TestCase):
 
     def test_reports_missing_fmriprep_derivatives(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
-            with self.assertRaisesRegex(FileNotFoundError, "fMRIPrep derivatives"):
+            with self.assertRaisesRegex(FileNotFoundError, "subject functional directory"):
                 discover_fmriprep_bold(Path(temporary_directory), "sub-10159")
 
 

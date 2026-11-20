@@ -16,6 +16,10 @@ from nibabel.processing import resample_to_output
 from nilearn.image import resample_img
 from nilearn.maskers import NiftiMasker
 
+from ttk29_balloon_pinning.config import get_data_root
+
+PROJECT_DATA_ROOT = Path(__file__).resolve().parents[2] / "data" / "ds000030"
+
 
 @dataclass
 class RunFiles:
@@ -26,7 +30,7 @@ class RunFiles:
     bold_path: Path
     mask_path: Path
     confounds_path: Path
-    metadata_path: Path
+    metadata_path: Path | None
 
 
 @dataclass
@@ -52,7 +56,9 @@ def _read_participant_status(data_root: Path) -> dict[str, str]:
     return dict(zip(participants["participant_id"].astype(str), participants["diagnosis"].astype(str)))
 
 
-def _sidecar_for_bold(bold_path: Path, data_root: Path, task: str) -> Path:
+def _sidecar_for_bold(
+    bold_path: Path, data_root: Path, task: str
+) -> Path | None:
     """Resolve the BIDS JSON sidecar needed for the run's actual repetition time."""
     exact_sidecar = bold_path.with_name(bold_path.name.replace(".nii.gz", ".json"))
     if exact_sidecar.is_file():
@@ -66,7 +72,9 @@ def _sidecar_for_bold(bold_path: Path, data_root: Path, task: str) -> Path:
     candidates = sorted(raw_func.glob(f"*task-{task}*_bold.json"))
     if candidates:
         return candidates[0]
-    raise FileNotFoundError(f"No BIDS bold JSON sidecar found for {bold_path}")
+    local_func = PROJECT_DATA_ROOT / participant_id / "func"
+    candidates = sorted(local_func.glob(f"*task-{task}*_bold.json"))
+    return candidates[0] if candidates else None
 
 
 def _confounds_for_bold(bold_path: Path) -> Path:
@@ -82,7 +90,7 @@ def _confounds_for_bold(bold_path: Path) -> Path:
 
 
 def discover_runs(
-    data_root: str | Path = "data/ds000030",
+    data_root: str | Path = get_data_root(),
     task: str = "rest",
     max_participants: int = 20,
     controls_only: bool = True,
@@ -92,12 +100,15 @@ def discover_runs(
     root = Path(data_root)
     if max_participants < 1:
         raise ValueError("max_participants must be positive")
-    derivative_root = root / "derivatives" / "fmriprep"
-    if not derivative_root.is_dir():
+    derivative_root = root
+    direct_subject_dirs = list(root.glob("sub-*/func"))
+    if not direct_subject_dirs:
+        derivative_root = root / "derivatives" / "fmriprep"
+    if not direct_subject_dirs and not derivative_root.is_dir():
         raise FileNotFoundError(
             f"fMRIPrep derivatives were not found at {derivative_root}. "
             "Run fMRIPrep for the requested task or pass --data-root pointing "
-            "to a BIDS dataset containing derivatives/fmriprep."
+            "to a dataset containing subject-level func folders or derivatives/fmriprep."
         )
 
     diagnosis = _read_participant_status(root)
@@ -107,9 +118,14 @@ def discover_runs(
             "use --include-all-diagnoses to skip diagnosis filtering."
         )
     bold_paths = sorted(
-        derivative_root.glob(
-            f"sub-*/func/*task-{task}*space-MNI152NLin2009cAsym_desc-preproc_bold.nii.gz"
-        )
+        {
+            *derivative_root.glob(
+                f"sub-*/func/*task-{task}*space-MNI152NLin2009cAsym_desc-preproc_bold.nii.gz"
+            ),
+            *derivative_root.glob(
+                f"sub-*/func/*task-{task}_bold_space-MNI152NLin2009cAsym_preproc.nii.gz"
+            ),
+        }
     )
     if not bold_paths:
         raise FileNotFoundError(
@@ -127,18 +143,33 @@ def discover_runs(
         participant_id = bold_path.name.split("_")[0]
         if participant_id not in selected:
             continue
-        mask_path = bold_path.with_name(
-            bold_path.name.replace("_desc-preproc_bold.nii.gz", "_desc-brain_mask.nii.gz")
-        )
+        if bold_path.name.endswith("_desc-preproc_bold.nii.gz"):
+            mask_path = bold_path.with_name(
+                bold_path.name.replace(
+                    "_desc-preproc_bold.nii.gz", "_desc-brain_mask.nii.gz"
+                )
+            )
+        else:
+            mask_path = bold_path.with_name(
+                bold_path.name.replace("_preproc.nii.gz", "_brainmask.nii.gz")
+            )
         if not mask_path.is_file():
             exclusions.append({"run": bold_path.name, "reason": "missing brain mask"})
             continue
         confounds_path = _confounds_for_bold(bold_path)
         confounds = pd.read_csv(confounds_path, sep="\t")
-        if "framewise_displacement" not in confounds:
+        fd_column = next(
+            (
+                column
+                for column in ("framewise_displacement", "FramewiseDisplacement")
+                if column in confounds
+            ),
+            None,
+        )
+        if fd_column is None:
             exclusions.append({"run": bold_path.name, "reason": "missing framewise_displacement"})
             continue
-        mean_fd = float(confounds["framewise_displacement"].mean())
+        mean_fd = float(pd.to_numeric(confounds[fd_column], errors="coerce").mean())
         if not np.isfinite(mean_fd):
             exclusions.append({"run": bold_path.name, "reason": "invalid mean framewise displacement"})
             continue
@@ -166,12 +197,20 @@ def discover_runs(
     return runs, exclusions
 
 
-def _load_tr(metadata_path: Path) -> float:
-    """Read the run repetition time from its BIDS JSON sidecar."""
-    metadata = json.loads(metadata_path.read_text())
-    tr = float(metadata["RepetitionTime"])
+def _load_tr(metadata_path: Path | None, bold_path: Path) -> float:
+    """Read the repetition time from BIDS metadata or the NIfTI header."""
+    if metadata_path is not None:
+        metadata = json.loads(metadata_path.read_text())
+        tr = float(metadata["RepetitionTime"])
+    else:
+        image = nib.load(bold_path)
+        zooms = image.header.get_zooms()
+        if len(zooms) < 4:
+            raise ValueError(f"No temporal resolution is available in {bold_path}")
+        tr = float(zooms[3])
     if not np.isfinite(tr) or tr <= 0:
-        raise ValueError(f"Invalid RepetitionTime in {metadata_path}: {tr}")
+        source = metadata_path if metadata_path is not None else bold_path
+        raise ValueError(f"Invalid RepetitionTime in {source}: {tr}")
     return tr
 
 
@@ -182,7 +221,34 @@ def _confound_columns(confounds: pd.DataFrame, include_global_signal: bool) -> p
     if include_global_signal:
         columns.append("global_signal")
     missing = [column for column in columns if column not in confounds.columns]
-    if missing:
+    if missing and all(
+        name in confounds.columns
+        for name in (
+            "X",
+            "Y",
+            "Z",
+            "RotX",
+            "RotY",
+            "RotZ",
+            "WhiteMatter",
+            *(f"aCompCor{index:02d}" for index in range(6)),
+        )
+    ):
+        columns = [
+            "X",
+            "Y",
+            "Z",
+            "RotX",
+            "RotY",
+            "RotZ",
+            "WhiteMatter",
+            *(f"aCompCor{index:02d}" for index in range(6)),
+        ]
+        if include_global_signal:
+            if "GlobalSignal" not in confounds.columns:
+                raise ValueError("Confounds table is missing required column: GlobalSignal")
+            columns.append("GlobalSignal")
+    elif missing:
         raise ValueError(f"Confounds table is missing required columns: {', '.join(missing)}")
     selected = confounds[columns].apply(pd.to_numeric, errors="coerce")
     return selected.replace([np.inf, -np.inf], np.nan).fillna(0.0)
@@ -226,7 +292,10 @@ def _cache_key(
 ) -> str:
     """Hash source versions and cleaning options to invalidate stale caches."""
     sources = []
-    for path in (run.bold_path, run.mask_path, run.confounds_path, run.metadata_path):
+    source_paths = [run.bold_path, run.mask_path, run.confounds_path]
+    if run.metadata_path is not None:
+        source_paths.append(run.metadata_path)
+    for path in source_paths:
         stat = path.stat()
         sources.append((str(path), stat.st_size, stat.st_mtime_ns))
     payload = repr(
@@ -243,7 +312,7 @@ def _cache_key(
 
 
 def load_clean_runs(
-    data_root: str | Path = "data/ds000030",
+    data_root: str | Path = get_data_root(),
     task: str = "rest",
     max_participants: int = 20,
     controls_only: bool = True,
@@ -278,7 +347,7 @@ def load_clean_runs(
 
     runs: list[SensorRun] = []
     for run in run_files:
-        tr = _load_tr(run.metadata_path)
+        tr = _load_tr(run.metadata_path, run.bold_path)
         cache_key = _cache_key(
             run, tr, voxel_size_mm, smoothing_fwhm_mm, include_global_signal, common_mask_hash
         )

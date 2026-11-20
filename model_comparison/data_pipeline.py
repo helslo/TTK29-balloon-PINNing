@@ -120,29 +120,55 @@ def select_fmriprep_confounds(confounds: pd.DataFrame) -> pd.DataFrame:
     Global signal regression is deliberately excluded because it can remove
     neural signal and is not an uncontroversial default.
     """
-    motion = ("trans_x", "trans_y", "trans_z", "rot_x", "rot_y", "rot_z")
-    columns = [
-        name
-        for name in motion
-        + tuple(f"{name}_derivative1" for name in motion)
-        + tuple(f"{name}_power2" for name in motion)
-        + tuple(f"{name}_derivative1_power2" for name in motion)
-        + ("white_matter", "csf")
-        if name in confounds.columns
-    ]
+    column_by_name = {str(name).casefold(): name for name in confounds.columns}
+    motion_aliases = (
+        ("trans_x", "X"),
+        ("trans_y", "Y"),
+        ("trans_z", "Z"),
+        ("rot_x", "RotX"),
+        ("rot_y", "RotY"),
+        ("rot_z", "RotZ"),
+    )
+    columns = []
+    for name, alias in motion_aliases:
+        source_name = column_by_name.get(name.casefold())
+        if source_name is None:
+            source_name = column_by_name.get(alias.casefold())
+        if source_name is not None:
+            columns.append(source_name)
+    for expansion in ("derivative1", "power2", "derivative1_power2"):
+        columns.extend(
+            column_by_name[f"{name}_{expansion}".casefold()]
+            for name, *_ in motion_aliases
+            if f"{name}_{expansion}".casefold() in column_by_name
+        )
+    for aliases in (("white_matter", "whitematter"), ("csf",)):
+        source_name = next(
+            (column_by_name[alias] for alias in aliases if alias in column_by_name),
+            None,
+        )
+        if source_name is not None:
+            columns.append(source_name)
     columns.extend(
         name
         for name in sorted(
-            name for name in confounds.columns if name.startswith("a_comp_cor_")
+            (
+                source_name
+                for normalized_name, source_name in column_by_name.items()
+                if normalized_name.startswith(("a_comp_cor_", "acompcor"))
+            ),
+            key=lambda source_name: str(source_name).casefold(),
         )[:6]
     )
     columns.extend(
-        name for name in sorted(confounds.columns) if name.startswith("cosine")
+        source_name
+        for normalized_name, source_name in sorted(column_by_name.items())
+        if normalized_name.startswith("cosine")
     )
     columns.extend(
-        name
-        for name in sorted(confounds.columns)
-        if name.startswith("non_steady_state_outlier")
+        source_name
+        for normalized_name, source_name in sorted(column_by_name.items())
+        if normalized_name.startswith("non_steady_state_outlier")
     )
     if not columns:
         raise ValueError(

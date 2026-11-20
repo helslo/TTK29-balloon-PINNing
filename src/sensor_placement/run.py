@@ -8,6 +8,8 @@ from pathlib import Path
 
 import numpy as np
 
+from ttk29_balloon_pinning.config import get_data_root
+
 from .data import load_clean_runs, temporal_holdout_split
 from .evaluate import evaluate_all, log_k_grid
 from .methods import _low_rank_basis, qr_pivot_placement
@@ -42,7 +44,7 @@ def _default_l1_k_values(k_values: list[int]) -> list[int]:
 def main(argv: list[str] | None = None) -> None:
     """Load real fMRIPrep inputs, evaluate sensor strategies, and save reproducible outputs."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--data-root", type=Path, default=Path("data/ds000030"))
+    parser.add_argument("--data-root", type=Path, default=get_data_root())
     parser.add_argument("--task", default="rest", help="BIDS task label, default: rest")
     parser.add_argument("--max-participants", type=int, default=20)
     parser.add_argument("--include-all-diagnoses", action="store_true")

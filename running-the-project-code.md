@@ -27,7 +27,9 @@ successful-GO-only input.
 ## fMRIPrep and ROI comparison
 
 By default, the comparison reads the raw stop-signal BOLD and events files
-from `data/ds000030/<subject>/func/`. For example:
+from `data/ds000030/<subject>/func/`. fMRIPrep discovery checks
+`<data-root>/<subject>/func/` first, then the standard
+`<data-root>/derivatives/fmriprep/<subject>/func/` layout. For example:
 
 ```bash
 uv run python -m ttk29_balloon_pinning compare --subject sub-10159 --epochs 2000
@@ -53,9 +55,17 @@ uv run python -m ttk29_balloon_pinning compare \
 The `--fmriprep` option discovers a unique task-stopsignal preprocessed BOLD
 image, the associated confounds TSV, and its brain mask if present. It stops
 with an error if multiple runs match rather than choosing an arbitrary run.
-For a manually selected run, use `--bold-path /path/to/desc-preproc_bold.nii.gz`
-and `--confounds-path /path/to/desc-confounds_timeseries.tsv` instead. Use
-`--events-path` if your events file is not at the raw BIDS default location.
+For a manually selected run, use `--bold-path` with either a standard
+`desc-preproc_bold.nii.gz` file or a file named like
+`sub-10159_task-stopsignal_bold_space-MNI152NLin2009cAsym_preproc.nii.gz`.
+Matching confounds and brain masks in the latter layout use
+`..._bold_confounds.tsv` and `..._brainmask.nii.gz`. Use `--events-path` if
+your events file is not at the raw BIDS default location. If it is missing from
+the configured data root, the project searches its local `data/` folder for a
+matching subject/task events TSV.
+To use a shared dataset without copying it into the repository, set
+`TTK29_DATA_ROOT` to its BIDS root or pass `--data-root /path/to/dataset`;
+`run_comparison_analysis.py` also has a `DATA_ROOT` setting.
 
 `--schaefer-network` fetches/caches the 400-parcel, 7-network Schaefer 2018
 atlas using Nilearn, then saves a binary network mask and its parcel labels in

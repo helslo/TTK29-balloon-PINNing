@@ -10,13 +10,16 @@ from model_comparison.run import main
 # Select "physical", "pinn", "costa", or "compare".
 MODE = "compare"
 EPOCHS = 2000
+RUN_EXTRAPOLATION_TEST = False
 
 # Leave DATA_FILE and SUBJECT unset to use the default real BIDS subject.
 DATA_FILE: Path | None = None
+DATA_ROOT: Path | None = None
 SUBJECT: str | None = None
 ROI_MASK: Path | None = None
 BOLD_PATH: Path | None = None
 CONFOUNDS_PATH: Path | None = None
+ECHO_TIME: float | None = None
 USE_FMRIPREP = False
 SCHAEFER_NETWORK: str | None = None
 SCHAEFER_HEMISPHERE = "both"
@@ -31,6 +34,8 @@ def main_from_config() -> None:
     arguments = ["--mode", MODE, "--epochs", str(EPOCHS)]
     if DATA_FILE is not None:
         arguments.extend(["--data", str(DATA_FILE)])
+    if DATA_ROOT is not None:
+        arguments.extend(["--data-root", str(DATA_ROOT)])
     if SUBJECT is not None:
         arguments.extend(["--subject", SUBJECT])
     if ROI_MASK is not None:
@@ -43,12 +48,16 @@ def main_from_config() -> None:
         arguments.extend(["--bold-path", str(BOLD_PATH)])
     if CONFOUNDS_PATH is not None:
         arguments.extend(["--confounds-path", str(CONFOUNDS_PATH)])
+    if ECHO_TIME is not None:
+        arguments.extend(["--echo-time", str(ECHO_TIME)])
     if USE_FMRIPREP:
         arguments.append("--fmriprep")
     if OUTPUT_DIR is not None:
         arguments.extend(["--output-dir", str(OUTPUT_DIR)])
     if not FIT_PHYSICAL_MODEL:
         arguments.append("--no-fit-physical")
+    if RUN_EXTRAPOLATION_TEST:
+        arguments.append("--extrapolation-test")
     main(arguments)
 
 
