@@ -175,6 +175,7 @@ def main(argv: list[str] | None = None) -> None:
         "smoothing_fwhm_mm": args.smoothing_fwhm_mm,
         "global_signal_regressed": args.global_signal,
         "k_values": k_values,
+        "svd_rank": args.rank if args.rank is not None else "auto_90_percent_up_to_64",
         "l1_included": args.include_l1,
         "l1_k_values": l1_k_values if args.include_l1 else [],
         "l1_test_timepoints": args.l1_test_timepoints,

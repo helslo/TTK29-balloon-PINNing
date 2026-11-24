@@ -97,7 +97,7 @@ def _make_method(
     if method == "random":
         return random_placement(X_train, k, rng=rng, r=rank, basis=basis)
     if method == "qr":
-        return qr_pivot_placement(X_train, k, r=rank)
+        return qr_pivot_placement(X_train, k, r=rank, basis=basis)
     if method == "l1_random":
         return l1_dct_placement(
             X_train, k, spatial_shape, brain_voxel_indices,
@@ -132,6 +132,18 @@ def _evaluate_split(
     records: list[dict[str, object]] = []
     selected_qr: list[np.ndarray] = []
     methods = METHODS if include_l1 else METHODS[:2]
+    qr_basis, _, _ = _low_rank_basis(X_train, r=rank)
+    cached_bases = {qr_basis.shape[1]: qr_basis}
+
+    def basis_for_rank(requested_rank: int) -> np.ndarray:
+        available_ranks = [value for value in cached_bases if value >= requested_rank]
+        if available_ranks:
+            available_rank = min(available_ranks)
+            return cached_bases[available_rank][:, :requested_rank]
+        basis, _, _ = _low_rank_basis(X_train, r=requested_rank)
+        cached_bases[requested_rank] = basis
+        return basis
+
     for k in k_values:
         for method in methods:
             if method.startswith("l1_") and int(k) not in l1_k_values:
@@ -139,7 +151,9 @@ def _evaluate_split(
             random_basis = None
             if method == "random":
                 basis_rank = min(int(k), rank or int(k), MAX_SVD_RANK)
-                random_basis, _, _ = _low_rank_basis(X_train, r=basis_rank)
+                random_basis = basis_for_rank(basis_rank)
+            elif method == "qr":
+                random_basis = qr_basis
             draws = min(n_random_draws, 3) if method == "l1_random" else (
                 n_random_draws if method == "random" else 1
             )

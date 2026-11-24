@@ -12,10 +12,32 @@ from sensor_placement.data import (
     _load_tr,
     discover_runs,
 )
-from sensor_placement.methods import _reconstruct_from_basis
+from sensor_placement.methods import (
+    _low_rank_basis,
+    _reconstruct_from_basis,
+    qr_pivot_placement,
+)
 
 
 class SharedDatasetSensorDataTests(unittest.TestCase):
+    def test_precomputed_qr_basis_matches_internal_basis_fit(self) -> None:
+        rng = np.random.default_rng(42)
+        training = rng.normal(size=(24, 12)).astype(np.float32)
+        basis, _, _ = _low_rank_basis(training, r=4)
+
+        sensors_internal, reconstruct_internal = qr_pivot_placement(
+            training, k=8, r=4
+        )
+        sensors_cached, reconstruct_cached = qr_pivot_placement(
+            training, k=8, r=4, basis=basis
+        )
+        observed = rng.normal(size=(24, 5)).astype(np.float32)
+
+        np.testing.assert_array_equal(sensors_cached, sensors_internal)
+        np.testing.assert_allclose(
+            reconstruct_cached(observed), reconstruct_internal(observed), rtol=1e-5
+        )
+
     def test_regularizes_ill_conditioned_low_rank_sensor_system(self) -> None:
         basis = np.array([[1.0, 0.0], [0.0, 1e-3], [1.0, 1.0]])
         observed = np.array([[1.0], [1.0], [0.0]])

@@ -141,12 +141,26 @@ def qr_pivot_placement(
     k: int,
     r: int | None = None,
     max_rank: int = MAX_SVD_RANK,
+    basis: np.ndarray | None = None,
 ) -> tuple[np.ndarray, Reconstruction]:
     """Select informative voxel rows by pivoting QR over the leading spatial modes."""
     n_voxels = X_train.shape[0]
     if not 1 <= int(k) <= n_voxels:
         raise ValueError(f"k must be between 1 and {n_voxels}")
-    basis, _, selected_rank = _low_rank_basis(X_train, r=r, max_rank=max_rank)
+    if basis is None:
+        basis, _, selected_rank = _low_rank_basis(X_train, r=r, max_rank=max_rank)
+    else:
+        basis = np.asarray(basis, dtype=np.float32)
+        if (
+            basis.ndim != 2
+            or basis.shape[0] != n_voxels
+            or basis.shape[1] < 1
+            or basis.shape[1] > max_rank
+        ):
+            raise ValueError("basis must contain 1..max_rank modes for every voxel")
+        if r is not None and basis.shape[1] > r:
+            basis = basis[:, :r]
+        selected_rank = basis.shape[1]
     basis = basis[:, :min(selected_rank, int(k))]
     _, _, pivots = linalg.qr(basis.T, mode="economic", pivoting=True)
     sensors = np.asarray(pivots[:int(k)], dtype=int)
